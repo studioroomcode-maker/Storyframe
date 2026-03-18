@@ -4,3 +4,6 @@ coverage/
 test-results/
 *.log
 .DS_Store
+.storyframe-profile/
+__*.js
+__*.html
