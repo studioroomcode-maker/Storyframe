@@ -1,0 +1,11 @@
+{
+  "name": "storyframe-local",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local desktop launcher for StoryFrame",
+  "main": "local-app.js",
+  "scripts": {
+    "start": "node local-app.js",
+    "print-url": "node local-app.js --print-url"
+  }
+}
