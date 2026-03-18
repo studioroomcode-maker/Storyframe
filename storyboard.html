@@ -1618,11 +1618,11 @@ select.setting-input {
     <div class="logo-text">Story<span>Frame</span></div>
   </div>
   <div class="header-actions" id="headerActions" style="display:none;">
-    <button class="btn" onclick="resetApp()">?????곸긽</button>
-    <button class="btn" onclick="scrollToScenario()" id="headerScenarioBtn" style="display:none;">?뱷 ?쒕굹由ъ삤</button>
-    <button class="btn" onclick="scrollToBenchmark()" id="headerBenchmarkBtn" style="display:none;">?뱩 踰ㅼ튂</button>
-    <button class="btn" onclick="toggleDebug()" title="API ?붾쾭洹?濡쒓렇">?뵩</button>
-    <button class="btn btn-primary" onclick="showExportModal()">燧??대낫?닿린</button>
+    <button class="btn" onclick="resetApp()">새 영상</button>
+    <button class="btn" onclick="scrollToScenario()" id="headerScenarioBtn" style="display:none;">📝 시나리오 보기</button>
+    <button class="btn" onclick="scrollToBenchmark()" id="headerBenchmarkBtn" style="display:none;">📊 벤치마크</button>
+    <button class="btn" onclick="toggleDebug()" title="API 디버그 로그">🐛</button>
+    <button class="btn btn-primary" onclick="showExportModal()">📤 내보내기</button>
   </div>
 </header>
 
@@ -1632,11 +1632,11 @@ select.setting-input {
   <!-- Upload Section -->
   <section class="upload-section" id="uploadSection">
     <div class="upload-zone" id="uploadZone">
-      <div class="upload-icon">?렗</div>
-      <div class="upload-title">?곸긽???쒕옒洹명븯嫄곕굹 ?대┃?섏뿬 ?낅줈??/div>
+      <div class="upload-icon">🎬</div>
+      <div class="upload-title">영상이나 사진을 드래그하여 놓으세요</div>
       <div class="upload-subtitle">
-        濡쒖뺄?먯꽌 ?λ㈃??遺꾩꽍?섏뿬 ?먮룞?쇰줈 ?ㅽ넗由щ낫?쒕? ?앹꽦?⑸땲??<br>
-        紐⑤뱺 泥섎━??釉뚮씪?곗??먯꽌 ?대（?댁?硫? ?곸긽???쒕쾭濡??꾩넚?섏? ?딆뒿?덈떎.
+        업로드하면 장면이 감지되어 자동으로 스토리보드가 생성됩니다.<br>
+        여러 이미지 파일을 함께 선택하면 영상처럼 순서대로 이어집니다.
       </div>
       <div class="upload-formats">
         <span class="format-badge">MP4</span>
@@ -1646,10 +1646,10 @@ select.setting-input {
         <span class="format-badge">MKV</span>
       </div>
       <div style="margin-top:24px;">
-        <label for="file-input" class="btn btn-primary" style="display:inline-flex;cursor:pointer;padding:12px 28px;font-size:14px;">?뱚 ?뚯씪 ?좏깮</label>
+        <label for="file-input" class="btn btn-primary" style="display:inline-flex;cursor:pointer;padding:12px 28px;font-size:14px;">🎥 파일 선택</label>
       </div>
       <div style="margin-top:10px;">
-        <label for="photo-input" class="btn" style="display:inline-flex;cursor:pointer;padding:10px 24px;font-size:13px;">?벜 ?ъ쭊 珥ъ쁺/?좏깮</label>
+        <label for="photo-input" class="btn" style="display:inline-flex;cursor:pointer;padding:10px 24px;font-size:13px;">📷 사진 촬영/선택</label>
       </div>
       <input type="file" id="file-input" accept="video/*">
       <input type="file" id="photo-input" accept="image/*" capture="environment">
@@ -1669,10 +1669,10 @@ select.setting-input {
       </div>
 
       <div class="settings-panel">
-        <div class="settings-title">??遺꾩꽍 ?ㅼ젙</div>
+        <div class="settings-title">⚙️ 감지 설정</div>
 
         <div class="setting-group">
-          <label class="setting-label">?λ㈃ 媛먯? 媛먮룄</label>
+          <label class="setting-label">장면 변화 감도</label>
           <div class="setting-range">
             <input type="range" id="sensitivity" min="10" max="90" value="40">
             <span class="range-value" id="sensitivityVal">40%</span>
@@ -1680,18 +1680,18 @@ select.setting-input {
         </div>
 
         <div class="setting-group">
-          <label class="setting-label">理쒖냼 ?λ㈃ 湲몄씠</label>
+          <label class="setting-label">최소 장면 길이</label>
           <select class="setting-input" id="minScene">
-            <option value="0.5">0.5珥?/option>
-            <option value="1" selected>1珥?/option>
-            <option value="2">2珥?/option>
-            <option value="3">3珥?/option>
-            <option value="5">5珥?/option>
+            <option value="0.5">0.5초</option>
+            <option value="1" selected>1초</option>
+            <option value="2">2초</option>
+            <option value="3">3초</option>
+            <option value="5">5초</option>
           </select>
         </div>
 
         <div class="setting-group">
-          <label class="setting-label">理쒕? ?ㅽ봽?덉엫 ??/label>
+          <label class="setting-label">최대 프레임 수</label>
           <select class="setting-input" id="maxFrames">
             <option value="10">10</option>
             <option value="20" selected>20</option>
@@ -1702,32 +1702,32 @@ select.setting-input {
         </div>
 
         <div class="setting-group">
-          <label class="setting-label">AI ?ㅻ챸 ?앹꽦</label>
+          <label class="setting-label">AI 분석 생성</label>
           <select class="setting-input" id="aiMode" onchange="toggleApiKeyField()">
             <option value="on">Claude API</option>
-            <option value="gemini" selected>Gemini API (臾대즺)</option>
-            <option value="local">濡쒖뺄 遺꾩꽍留?/option>
+            <option value="gemini" selected>Gemini API (무료)</option>
+            <option value="local">로컬 감지만</option>
           </select>
         </div>
 
         <div class="setting-group" id="apiKeyGroup">
-          <label class="setting-label">API ??<span id="apiKeyStatus" style="font-weight:400;text-transform:none;letter-spacing:0;"></span></label>
+          <label class="setting-label">API 키<span id="apiKeyStatus" style="font-weight:400;text-transform:none;letter-spacing:0;"></span></label>
           <div style="display:flex;gap:6px;">
             <input type="password" class="setting-input" id="apiKeyInput" placeholder="sk-ant-..." style="flex:1;font-size:12px;" autocomplete="off" value="">
-            <button class="btn" onclick="toggleApiKeyVisibility()" style="padding:8px 10px;font-size:14px;" title="蹂닿린/?④린湲?>?몓</button>
+            <button class="btn" onclick="toggleApiKeyVisibility()" style="padding:8px 10px;font-size:14px;" title="보이기/숨기기">👁</button>
           </div>
           <div style="font-size:11px;color:var(--text-muted);margin-top:4px;line-height:1.5;" id="apiKeyHint">
-            濡쒖뺄 ?섍꼍?먯꽌??<a href="https://console.anthropic.com/settings/keys" target="_blank" style="color:var(--info);text-decoration:none;">Anthropic API ??/a>媛 ?꾩슂?⑸땲??
-            claude.ai ?댁뿉?쒕뒗 ?먮룞 ?곌껐?⑸땲??
+            로컬 사용시는 <a href="https://console.anthropic.com/settings/keys" target="_blank" style="color:var(--info);text-decoration:none;">Anthropic API 키</a>가 필요합니다.
+            claude.ai 앱에서는 자동 연결됩니다.
           </div>
           <div style="display:flex;gap:6px;margin-top:6px;">
-            <button class="btn" onclick="testApiConnection()" style="flex:1;font-size:11px;padding:6px;">?뵆 API ?곌껐 ?뚯뒪??/button>
+            <button class="btn" onclick="testApiConnection()" style="flex:1;font-size:11px;padding:6px;">🔌 API 연결 테스트</button>
           </div>
           <div id="apiTestResult" style="font-size:11px;margin-top:4px;line-height:1.5;display:none;"></div>
         </div>
 
         <button class="btn btn-primary generate-btn" id="generateBtn" onclick="generateStoryboard()">
-          ???ㅽ넗由щ낫???앹꽦
+          🎬 스토리보드 생성
         </button>
       </div>
     </div>
@@ -1735,19 +1735,19 @@ select.setting-input {
     <!-- Storyboard -->
     <div class="storyboard-section" id="storyboardSection">
       <div class="storyboard-header">
-        <div class="storyboard-title">?뱥 ?ㅽ넗由щ낫??/div>
+        <div class="storyboard-title">🎬 스토리보드</div>
         <div class="storyboard-stats">
           <div class="stat">
             <div class="stat-value" id="totalScenes">0</div>
-            <div class="stat-label">?λ㈃</div>
+            <div class="stat-label">장면</div>
           </div>
           <div class="stat">
             <div class="stat-value" id="totalDuration">0:00</div>
-            <div class="stat-label">珥?湲몄씠</div>
+            <div class="stat-label">총 길이</div>
           </div>
           <div class="stat">
             <div class="stat-value" id="avgScene">0s</div>
-            <div class="stat-label">?됯퇏 ?λ㈃</div>
+            <div class="stat-label">평균 장면</div>
           </div>
         </div>
       </div>
@@ -1755,7 +1755,8 @@ select.setting-input {
       <!-- Timeline -->
       <div class="timeline-strip">
         <div class="timeline-label" style="display:flex;align-items:center;gap:8px;">
-          ??꾨씪??          <button id="tlSplitModeBtn" class="tl-mode-btn" onclick="toggleTimelineSplitMode()" title="?ъ쓣 ?대┃???꾩튂?먯꽌 遺꾪븷">??遺꾪븷 紐⑤뱶</button>
+          타임라인
+          <button id="tlSplitModeBtn" class="tl-mode-btn" onclick="toggleTimelineSplitMode()" title="클릭하여 분할 모드로 전환">✂️ 분할 모드</button>
         </div>
         <div class="timeline-bar-wrap" id="timelineBarWrap">
           <div id="tlPlayhead">
@@ -1773,28 +1774,28 @@ select.setting-input {
       <div class="scenario-section" id="scenarioSection" style="display:none;">
         <div class="scenario-header">
           <div>
-            <div class="scenario-title">?뱷 AI ?쒕굹由ъ삤</div>
-            <div class="scenario-subtitle">?ㅽ넗由щ낫??遺꾩꽍??湲곕컲?쇰줈 ?앹꽦???쒕굹由ъ삤</div>
+            <div class="scenario-title">📝 AI 시나리오</div>
+            <div class="scenario-subtitle">스토리보드 감지를 기반으로 생성된 시나리오</div>
           </div>
           <div class="scenario-actions-top">
             <select class="setting-input" id="scenarioFormat" style="font-size:12px;padding:6px 28px 6px 10px;">
-              <option value="narrative">?대윭?곕툕 ?쒕굹由ъ삤</option>
-              <option value="screenplay">?곹솕 媛곷낯 ?뺤떇</option>
-              <option value="documentary">?ㅽ걧硫섑꽣由??섎젅?댁뀡</option>
-              <option value="commercial">愿묎퀬/CF ?쒕굹由ъ삤</option>
-              <option value="youtube">?좏뒠釉??蹂?/option>
+              <option value="narrative">내러티브 시나리오</option>
+              <option value="screenplay">정식 각본 형식</option>
+              <option value="documentary">다큐멘터리 스타일</option>
+              <option value="commercial">광고/CF 시나리오</option>
+              <option value="youtube">유튜브 구성</option>
             </select>
-            <button class="btn btn-primary" onclick="generateScenario()" id="scenarioGenBtn">???쒕굹由ъ삤 ?앹꽦</button>
-            <button class="btn" onclick="regenerateScenario()" id="scenarioRegenBtn" style="display:none;">???ъ깮??/button>
-            <button class="btn" onclick="copyScenario()" id="scenarioCopyBtn" style="display:none;">?뱥 蹂듭궗</button>
+            <button class="btn btn-primary" onclick="generateScenario()" id="scenarioGenBtn">📝 시나리오 생성</button>
+            <button class="btn" onclick="regenerateScenario()" id="scenarioRegenBtn" style="display:none;">🔄 재생성</button>
+            <button class="btn" onclick="copyScenario()" id="scenarioCopyBtn" style="display:none;">📋 복사</button>
           </div>
         </div>
-        
+
         <!-- Scenario Loading -->
         <div class="scenario-loading" id="scenarioLoading" style="display:none;">
           <div class="scenario-loading-spinner"></div>
-          <div class="scenario-loading-text">AI媛 ?쒕굹由ъ삤瑜??묒꽦?섍퀬 ?덉뒿?덈떎...</div>
-          <div class="scenario-loading-sub" id="scenarioLoadingSub">?λ㈃ ?곗씠??遺꾩꽍 以?/div>
+          <div class="scenario-loading-text">AI가 시나리오를 작성하고 있습니다...</div>
+          <div class="scenario-loading-sub" id="scenarioLoadingSub">장면 데이터 감지 중</div>
         </div>
 
         <!-- Scenario Content -->
@@ -1807,28 +1808,28 @@ select.setting-input {
       <div class="benchmark-section" id="benchmarkSection" style="display:none;">
         <div class="benchmark-header">
           <div>
-            <div class="benchmark-title">?뱩 Benchmark Mode</div>
-            <div class="benchmark-subtitle">?λ㈃ ?뺣떟??吏곸젒 ?섏젙?섍퀬 ?꾩옱 遺꾩꽍怨??먮룞 鍮꾧탳?⑸땲??/div>
+            <div class="benchmark-title">📊 Benchmark Mode</div>
+            <div class="benchmark-subtitle">장면 정답을 직접 설정하고 현재 감지와 자동 비교합니다.</div>
           </div>
           <div class="benchmark-actions">
-            <button class="btn" onclick="createBenchmarkFromCurrent()">?꾩옱 寃곌낵濡?珥덉븞 留뚮뱾湲?/button>
-            <button class="btn" onclick="triggerBenchmarkImport()">JSON 遺덈윭?ㅺ린</button>
-            <button class="btn" onclick="exportBenchmark()" id="benchmarkExportBtn" disabled>JSON ???/button>
-            <button class="btn" onclick="learnOnly()" id="benchmarkLearnBtn" disabled style="border-color:rgba(196,240,77,0.4);color:#c4f04d;">?쭬 ?숈뒿?섍린</button>
-            <button class="btn btn-primary" onclick="compareCurrentToBenchmark()" id="benchmarkCompareBtn" disabled>?꾩옱 遺꾩꽍怨?鍮꾧탳</button>
-            <button class="btn" onclick="clearLearningDB()" style="border-color:rgba(255,80,80,0.4);color:#ff8080;" title="??λ맂 ?숈뒿 ?곗씠?곕? ??젣?⑸땲??>?숈뒿 DB 珥덇린??/button>
+            <button class="btn" onclick="createBenchmarkFromCurrent()">현재 결과로 초안 만들기</button>
+            <button class="btn" onclick="triggerBenchmarkImport()">JSON 불러오기</button>
+            <button class="btn" onclick="exportBenchmark()" id="benchmarkExportBtn" disabled>JSON 저장</button>
+            <button class="btn" onclick="learnOnly()" id="benchmarkLearnBtn" disabled style="border-color:rgba(196,240,77,0.4);color:#c4f04d;">✨ 학습시키기</button>
+            <button class="btn btn-primary" onclick="compareCurrentToBenchmark()" id="benchmarkCompareBtn" disabled>현재 감지와 비교</button>
+            <button class="btn" onclick="clearLearningDB()" style="border-color:rgba(255,80,80,0.4);color:#ff8080;" title="모든 학습 데이터를 삭제합니다">학습 DB 초기화</button>
           </div>
           <div id="learningStats" style="padding:6px 0 0;"></div>
         </div>
 
         <div class="benchmark-summary" id="benchmarkSummary"></div>
         <div class="benchmark-empty" id="benchmarkEmpty">
-          ?ㅽ넗由щ낫?쒕? 留뚮뱺 ??`?꾩옱 寃곌낵濡?珥덉븞 留뚮뱾湲?濡??뺣떟?쒕? ?쒖옉?섍굅?? 湲곗〈 `benchmark.json`??遺덈윭?ㅼ꽭??
+          스토리보드를 먼저 만든 후 `현재 결과로 초안 만들기`로 정답을 작성하세요. 기존 `benchmark.json`을 불러올 수도 있습니다.
         </div>
 
         <div class="benchmark-toolbar" id="benchmarkToolbar" style="display:none;">
           <div class="benchmark-meta" id="benchmarkMeta"></div>
-          <div class="benchmark-hint">?쒓컙肄붾뱶??`HH:MM:SS:FF` ?먮뒗 珥??⑥쐞 ?レ옄瑜??낅젰?????덉뒿?덈떎.</div>
+          <div class="benchmark-hint">시간 형식은 `HH:MM:SS:FF` 또는 초 단위 숫자를 입력하면 됩니다.</div>
         </div>
 
         <div class="benchmark-table-wrap" id="benchmarkTableWrap" style="display:none;">
@@ -1836,14 +1837,14 @@ select.setting-input {
             <thead>
               <tr>
                 <th>#</th>
-                <th>?뺣떟 ?쒖옉</th>
-                <th>?뺣떟 ??/th>
-                <th>?꾪솚</th>
-                <th>??/th>
-                <th>?꾨젅?대컢</th>
-                <th>臾대튃</th>
-                <th>鍮꾧탳 寃곌낵</th>
-                <th>硫붾え</th>
+                <th>정답 시작</th>
+                <th>정답 끝</th>
+                <th>검출</th>
+                <th>점수</th>
+                <th>정확도</th>
+                <th>샷 타입</th>
+                <th>비교 결과</th>
+                <th>메모</th>
               </tr>
             </thead>
             <tbody id="benchmarkTableBody"></tbody>
@@ -1859,8 +1860,8 @@ select.setting-input {
 <div class="progress-overlay" id="progressOverlay">
   <div class="progress-card">
     <div class="progress-spinner"></div>
-    <div class="progress-title">?ㅽ넗由щ낫???앹꽦 以?/div>
-    <div class="progress-status" id="progressStatus">?곸긽 遺꾩꽍 以鍮?以?..</div>
+    <div class="progress-title">스토리보드 생성 중</div>
+    <div class="progress-status" id="progressStatus">영상 감지 준비 중...</div>
     <div class="progress-bar-track">
       <div class="progress-bar-fill" id="progressFill"></div>
     </div>
@@ -1871,60 +1872,60 @@ select.setting-input {
 <!-- Export Modal -->
 <div class="modal-overlay" id="exportModal">
   <div class="modal">
-    <h3>?벀 ?ㅽ넗由щ낫???대낫?닿린</h3>
+    <h3>📦 스토리보드 내보내기</h3>
     <div class="export-options">
       <div class="export-option" onclick="exportAs('html')">
-        <div class="export-icon">?뙋</div>
+        <div class="export-icon">🌐</div>
         <div>
-          <div class="export-label">HTML 蹂닿퀬??/div>
-          <div class="export-desc">?대?吏 ?ы븿 ?낅┰ HTML ?뚯씪</div>
+          <div class="export-label">HTML 보고서</div>
+          <div class="export-desc">이미지 포함된 완전한 HTML 파일</div>
         </div>
       </div>
       <div class="export-option" onclick="exportAs('json')">
-        <div class="export-icon">?뱞</div>
+        <div class="export-icon">📊</div>
         <div>
-          <div class="export-label">JSON ?곗씠??/div>
-          <div class="export-desc">?λ㈃ ?곗씠??+ base64 ?대?吏</div>
+          <div class="export-label">JSON 데이터</div>
+          <div class="export-desc">장면 데이터 + base64 이미지</div>
         </div>
       </div>
       <div class="export-option" onclick="exportAs('images')">
-        <div class="export-icon">?뼹</div>
+        <div class="export-icon">🖼️</div>
         <div>
-          <div class="export-label">?ㅽ봽?덉엫 ?대?吏</div>
-          <div class="export-desc">?λ㈃蹂?PNG ?대?吏 ZIP ?ㅼ슫濡쒕뱶</div>
+          <div class="export-label">프레임 이미지</div>
+          <div class="export-desc">장면별 PNG 이미지 ZIP 다운로드</div>
         </div>
       </div>
       <div class="export-option" onclick="exportAs('scenario')" id="exportScenarioOption" style="display:none;">
-        <div class="export-icon">?뱷</div>
+        <div class="export-icon">📝</div>
         <div>
-          <div class="export-label">?쒕굹由ъ삤 ?띿뒪??/div>
-          <div class="export-desc">?앹꽦???쒕굹由ъ삤瑜?TXT ?뚯씪濡????/div>
+          <div class="export-label">시나리오 텍스트</div>
+          <div class="export-desc">생성된 시나리오를 TXT 파일로 저장</div>
         </div>
       </div>
     </div>
-    <button class="modal-close" onclick="hideExportModal()">?リ린</button>
+    <button class="modal-close" onclick="hideExportModal()">닫기</button>
   </div>
 </div>
 
 <!-- Split Scene Modal -->
 <div id="splitSceneModal">
   <div class="split-dialog">
-    <h3>???λ㈃ 遺꾪븷</h3>
+    <h3>✂️ 장면 분할</h3>
     <div class="split-dialog-info" id="splitDialogInfo"></div>
     <button class="split-option-btn" onclick="splitSceneAtMidpoint(_splitSceneIdx)">
-      <span class="split-option-icon">??/span>
-      <div><strong>以묎컙 吏??遺꾪븷</strong><br><small style="color:var(--text-muted);">?λ㈃???뺥솗???덈컲?쇰줈 ?섎닏?덈떎</small></div>
+      <span class="split-option-icon">⚡</span>
+      <div><strong>중간 지점 분할</strong><br><small style="color:var(--text-muted);">장면의 정가운데 지점으로 나눕니다</small></div>
     </button>
     <button class="split-option-btn" onclick="splitSceneAtPlayhead(_splitSceneIdx)">
-      <span class="split-option-icon">??/span>
-      <div><strong>?꾩옱 ?ъ깮 ?꾩튂?먯꽌 遺꾪븷</strong><br><small style="color:var(--text-muted);">?뚮젅?댄뿤?쒓? ?덈뒗 ?꾩튂?먯꽌 ?섎닏?덈떎</small></div>
+      <span class="split-option-icon">🎯</span>
+      <div><strong>현재 재생 위치에서 분할</strong><br><small style="color:var(--text-muted);">플레이헤드가 있는 위치에서 나눕니다</small></div>
     </button>
-    <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;">?먮뒗 吏곸젒 ?쒓컙 ?낅젰</div>
+    <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;">또는 직접 시간 입력</div>
     <div class="split-custom-row">
       <input id="splitTimeInput" type="text" placeholder="00:00:05.000">
-      <button onclick="splitSceneCustom()">遺꾪븷</button>
+      <button onclick="splitSceneCustom()">분할</button>
     </div>
-    <button class="split-cancel-btn" onclick="closeSplitDialog()">痍⑥냼</button>
+    <button class="split-cancel-btn" onclick="closeSplitDialog()">취소</button>
   </div>
 </div>
 
@@ -1934,10 +1935,10 @@ select.setting-input {
 <!-- API Debug Panel -->
 <div id="debugPanel" style="display:none;position:fixed;bottom:0;left:0;right:0;max-height:240px;overflow-y:auto;background:rgba(10,10,12,0.95);border-top:1px solid var(--border);padding:12px 20px;z-index:500;font-family:'JetBrains Mono',monospace;font-size:11px;">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-    <span style="color:var(--accent);font-weight:600;">?뵩 API ?붾쾭洹?濡쒓렇</span>
+    <span style="color:var(--accent);font-weight:600;">🐛 API 디버그 로그</span>
     <div>
-      <button onclick="clearDebugLog()" style="background:none;border:1px solid var(--border);color:var(--text-muted);padding:2px 8px;border-radius:4px;cursor:pointer;font-size:10px;margin-right:4px;">吏?곌린</button>
-      <button onclick="toggleDebug()" style="background:none;border:1px solid var(--border);color:var(--text-muted);padding:2px 8px;border-radius:4px;cursor:pointer;font-size:10px;">?リ린</button>
+      <button onclick="clearDebugLog()" style="background:none;border:1px solid var(--border);color:var(--text-muted);padding:2px 8px;border-radius:4px;cursor:pointer;font-size:10px;margin-right:4px;">지우기</button>
+      <button onclick="toggleDebug()" style="background:none;border:1px solid var(--border);color:var(--text-muted);padding:2px 8px;border-radius:4px;cursor:pointer;font-size:10px;">닫기</button>
     </div>
   </div>
   <div id="debugLog" style="color:var(--text-muted);line-height:1.6;"></div>
@@ -2123,9 +2124,9 @@ function getLearningDBStats() {
 }
 
 function clearLearningDB() {
-  if (!confirm(`?숈뒿 ?곗씠??${getLearningDBStats().total}媛?瑜?紐⑤몢 ??젣?좉퉴??`)) return;
+  if (!confirm(`학습 데이터 ${getLearningDBStats().total}개를 모두 삭제할까요?`)) return;
   localStorage.removeItem(LEARNING_DB_KEY);
-  showToast('?숈뒿 ?곗씠?곌? ??젣?섏뿀?듬땲??');
+  showToast('학습 데이터가 모두 삭제됐습니다.');
   renderBenchmarkSection();
 }
 
@@ -2134,7 +2135,7 @@ function renderLearningStats() {
   if (!el) return;
   const stats = getLearningDBStats();
   if (stats.total === 0) {
-    el.innerHTML = '<span style="color:var(--text-muted);font-size:12px;">?숈뒿 ?곗씠???놁쓬</span>';
+    el.innerHTML = '<span style="color:var(--text-muted);font-size:12px;">학습 데이터 없음</span>';
     return;
   }
   const detail = Object.entries(stats.byField)
@@ -2198,19 +2199,19 @@ function updateApiKeyStatus() {
   userApiKey = inputEl ? inputEl.value.trim() : '';
 
   if (isClaudeAI) {
-    statusEl.innerHTML = '<span class="api-status-auto">??claude.ai ?먮룞 ?곌껐</span>';
+    statusEl.innerHTML = '<span class="api-status-auto">✅ claude.ai 자동 연결</span>';
     if (hintEl)  hintEl.style.display  = 'none';
-    if (inputEl) inputEl.placeholder   = '?먮룞 ?곌껐??(?좏깮?ы빆)';
+    if (inputEl) inputEl.placeholder = '자동 연결됨 (입력 불필요)';
   } else if (provider === 'gemini') {
     if (userApiKey.length > 20) {
       statusEl.innerHTML = '<span class="api-status-ok">??Gemini ???깅줉??/span>';
     } else {
-      statusEl.innerHTML = '<span class="api-status-need">??Gemini ???꾩슂</span>';
+      statusEl.innerHTML = '<span class="api-status-need">⚠️ Gemini 키 필요</span>';
     }
   } else if (userApiKey && userApiKey.startsWith('sk-')) {
     statusEl.innerHTML = '<span class="api-status-ok">??Claude ???깅줉??/span>';
   } else {
-    statusEl.innerHTML = '<span class="api-status-need">?????꾩슂</span>';
+    statusEl.innerHTML = '<span class="api-status-need">⚠️ API 키 필요</span>';
   }
 }
 
@@ -2301,7 +2302,7 @@ async function testApiConnection() {
   resultEl.innerHTML = '<span style="color:var(--text-muted);">???곌껐 ?뚯뒪??以?..</span>';
   
   const protocol = window.location.protocol;
-  debugLog(`API ?곌껐 ?뚯뒪???쒖옉 (protocol: ${protocol}, isClaudeAI: ${isClaudeAI})`);
+  debugLog(`API 연결 테스트 시작 (protocol: ${protocol}, isClaudeAI: ${isClaudeAI})`);
   
   // Check protocol
   if (protocol === 'file:') {
@@ -2402,7 +2403,7 @@ uploadZone.addEventListener('drop', e => {
     } else if (file.type.startsWith('image/')) {
       loadPhoto(file);
     } else {
-      showToast('吏?먰븯吏 ?딅뒗 ?뚯씪 ?뺤떇?낅땲?? ?곸긽 ?뚯씪???낅줈?쒗빐二쇱꽭??');
+      showToast('지원하지 않는 파일 형식입니다. 영상 파일을 놓아주세요.');
     }
   }
 });
@@ -2437,7 +2438,7 @@ benchmarkFileInput.addEventListener('change', async e => {
     benchmarkComparison = null;
     renderBenchmarkSection();
     if (scenes.length) compareCurrentToBenchmark(false);
-    showToast('踰ㅼ튂留덊겕 JSON??遺덈윭?붿뒿?덈떎.');
+    showToast('벤치마크 JSON을 불러왔습니다.');
   } catch (err) {
     console.error(err);
     showToast('踰ㅼ튂留덊겕 JSON???쎌? 紐삵뻽?듬땲??');
@@ -2936,7 +2937,7 @@ function metricNote(metric) {
 
 function createBenchmarkFromCurrent() {
   if (!scenes.length) {
-    showToast('癒쇱? ?ㅽ넗由щ낫?쒕? ?앹꽦?댁＜?몄슂.');
+    showToast('먼저 스토리보드를 생성해주세요.');
     return;
   }
 
@@ -2957,7 +2958,7 @@ function createBenchmarkFromCurrent() {
   benchmarkComparison = null;
   renderBenchmarkSection();
   compareCurrentToBenchmark(false);
-  showToast('?꾩옱 遺꾩꽍 寃곌낵瑜?湲곗??쇰줈 踰ㅼ튂留덊겕 珥덉븞??留뚮뱾?덉뒿?덈떎.');
+  showToast('현재 감지 결과를 벤치마크 초안으로 만들었습니다.');
 }
 
 function triggerBenchmarkImport() {
@@ -2983,11 +2984,11 @@ function normalizeBenchmarkData(payload) {
 
 function learnFromBenchmarkDiff() {
   if (!benchmarkData?.scenes?.length) {
-    showToast('癒쇱? 踰ㅼ튂留덊겕 珥덉븞??留뚮뱾?댁＜?몄슂.');
+    showToast('현재 감지 결과를 벤치마크 초안으로 만들었습니다.');
     return 0;
   }
   if (!scenes.length) {
-    showToast('遺꾩꽍???ㅽ넗由щ낫?쒓? ?놁뒿?덈떎.');
+    showToast('먼저 스토리보드를 생성해주세요.');
     return 0;
   }
   const FIELD_MAP = [
@@ -3027,7 +3028,7 @@ function learnFromBenchmarkDiff() {
 function learnOnly() {
   const count = learnFromBenchmarkDiff();
   if (count > 0) {
-    showToast(`?쭬 ${count}媛???ぉ ?숈뒿 ?꾨즺 (?꾩쟻 ${getLearningDBStats().total}媛?`);
+    showToast(`학습 데이터 ${getLearningDBStats().total}개를 모두 삭제할까요?`);
   } else {
     showToast('?숈뒿??李⑥씠媛 ?놁뒿?덈떎. 踰ㅼ튂留덊겕?먯꽌 ?由???ぉ???섏젙?댁＜?몄슂.');
   }
@@ -3051,7 +3052,7 @@ function exportBenchmark() {
     'application/json'
   );
   const msg = learnedCount > 0
-    ? `JSON ????꾨즺 쨌 ${learnedCount}媛???ぉ ?숈뒿??(?꾩쟻 ${getLearningDBStats().total}媛?`
+    ? `학습 데이터 ${getLearningDBStats().total}개를 모두 삭제할까요?`
     : 'JSON ????꾨즺';
   showToast(msg);
 }
@@ -3177,7 +3178,7 @@ function compareLabeledField(metric, expected, actual, canonicalize, metrics) {
 
 function compareCurrentToBenchmark(showNotification = true) {
   if (!benchmarkData?.scenes?.length) {
-    if (showNotification) showToast('癒쇱? 踰ㅼ튂留덊겕 珥덉븞??留뚮뱾嫄곕굹 JSON??遺덈윭?ㅼ꽭??');
+    if (showNotification) showToast('현재 감지 결과를 벤치마크 초안으로 만들었습니다.');
     return;
   }
   if (!scenes.length) {
@@ -9231,7 +9232,7 @@ function downloadBlob(content, filename, type) {
 
 function generateHTMLReport() {
   return `<!DOCTYPE html>
-<html lang="ko"><head><meta charset="UTF-8"><title>StoryFrame - ${videoFile.name}</title>
+<html lang="ko"><head><meta charset="UTF-8"><title>StoryFrame 영화 스토리보드 생성기</title>
 <style>
 body{font-family:-apple-system,sans-serif;max-width:1100px;margin:0 auto;padding:40px;background:#fafafa;color:#222}
 h1{font-size:28px;margin-bottom:4px}
