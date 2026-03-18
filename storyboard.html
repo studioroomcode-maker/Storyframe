@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+﻿﻿<!DOCTYPE html>
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
@@ -2141,7 +2141,7 @@ function renderLearningStats() {
   const detail = Object.entries(stats.byField)
     .map(([k, v]) => `${k}:${v}`)
     .join(' 쨌 ');
-  el.innerHTML = `<span style="color:#c4f04d;font-size:12px;font-family:\'JetBrains Mono\',monospace;">?쭬 ?숈뒿??${stats.total}媛?/span> <span style="color:var(--text-muted);font-size:11px;">(${detail})</span>`;
+    el.innerHTML = `<span style="color:#c4f04d;font-size:12px;font-family:'JetBrains Mono',monospace;">✨ 학습 ${stats.total}개</span> <span style="color:var(--text-secondary);font-size:11px;">${stats.fields.map(f => `${f.field}:${f.count}`).join(' · ')}</span>`;
 }
 // ?????????????????????????????????????????????????????????????????????????
 
@@ -2204,12 +2204,12 @@ function updateApiKeyStatus() {
     if (inputEl) inputEl.placeholder = '자동 연결됨 (입력 불필요)';
   } else if (provider === 'gemini') {
     if (userApiKey.length > 20) {
-      statusEl.innerHTML = '<span class="api-status-ok">??Gemini ???깅줉??/span>';
+      statusEl.innerHTML = '<span class="api-status-ok">✅ Gemini 키 등록됨</span>';
     } else {
       statusEl.innerHTML = '<span class="api-status-need">⚠️ Gemini 키 필요</span>';
     }
   } else if (userApiKey && userApiKey.startsWith('sk-')) {
-    statusEl.innerHTML = '<span class="api-status-ok">??Claude ???깅줉??/span>';
+    statusEl.innerHTML = '<span class="api-status-ok">✅ Claude 키 등록됨</span>';
   } else {
     statusEl.innerHTML = '<span class="api-status-need">⚠️ API 키 필요</span>';
   }
@@ -2299,20 +2299,14 @@ async function callGeminiRaw(key, systemPrompt, geminiParts, maxTokens) {
 async function testApiConnection() {
   const resultEl = document.getElementById('apiTestResult');
   resultEl.style.display = 'block';
-  resultEl.innerHTML = '<span style="color:var(--text-muted);">???곌껐 ?뚯뒪??以?..</span>';
+  resultEl.innerHTML = '<span style="color:var(--text-muted);">🔄 연결 테스트 중...</span>';
   
   const protocol = window.location.protocol;
   debugLog(`API 연결 테스트 시작 (protocol: ${protocol}, isClaudeAI: ${isClaudeAI})`);
   
   // Check protocol
   if (protocol === 'file:') {
-    resultEl.innerHTML = `<span style="color:var(--danger);">??file:// ?꾨줈?좎퐳 媛먯?</span><br>
-      <span style="color:var(--text-muted);font-size:10px;">
-        釉뚮씪?곗?媛 file:// ?먯꽌 ?몃? API ?몄텧??李⑤떒?⑸땲??<br>
-        <strong style="color:var(--warm);">?닿껐 諛⑸쾿:</strong> ?곕??먯뿉???꾨옒 紐낅졊???ㅽ뻾 ???묒냽?섏꽭??<br>
-        <code style="background:rgba(255,255,255,0.08);padding:2px 6px;border-radius:3px;color:var(--accent);user-select:all;">python3 -m http.server 8080</code><br>
-        ??<a href="http://localhost:8080/storyboard.html" style="color:var(--info);">http://localhost:8080/storyboard.html</a>
-      </span>`;
+    resultEl.innerHTML = `<span style="color:var(--danger);">❌ file:// 프로토콜 감지</span><br><span style="color:var(--text-muted);font-size:11px;">서버를 통해 실행해야 합니다. <code>node local-app.js</code>로 시작하세요.</span>`;
     debugLog('file:// ?꾨줈?좎퐳 ??濡쒖뺄 ?쒕쾭 ?꾩슂', 'error');
     return;
   }
@@ -2324,7 +2318,7 @@ async function testApiConnection() {
     const hint = provider === 'gemini'
       ? '<a href="https://aistudio.google.com/apikey" target="_blank" style="color:var(--info);">Google AI Studio</a>?먯꽌 AIzaSy... ?뺥깭???ㅻ? ?낅젰?섏꽭??'
       : '?ㅼ젙?먯꽌 <code>sk-ant-...</code> ?뺥깭??Claude ?ㅻ? ?낅젰?섏꽭??';
-    resultEl.innerHTML = `<span style="color:var(--danger);">??API ?ㅺ? ?낅젰?섏? ?딆븯?듬땲??/span><br>
+    resultEl.innerHTML = `<span style="color:var(--danger);">❌ API 키를 입력하지 않았습니다.</span><br>${keyHint}`;
       <span style="color:var(--text-muted);font-size:10px;">${hint}</span>`;
     return;
   }
@@ -2332,8 +2326,7 @@ async function testApiConnection() {
   // Try actual API call
   try {
     const text = await callAI('', [{ type: 'text', text: 'hi' }], 10);
-    resultEl.innerHTML = `<span style="color:var(--accent);">??${provider === 'gemini' ? 'Gemini' : 'Claude'} API ?곌껐 ?깃났!</span><br>
-      <span style="color:var(--text-muted);font-size:10px;">AI 移대찓??遺꾩꽍???ъ슜?????덉뒿?덈떎.</span>`;
+    resultEl.innerHTML = `<span style="color:var(--accent);">✅ ${provider === 'gemini' ? 'Gemini' : 'Claude'} API 연결 성공!</span>`;
     debugLog(`${provider} API ?곌껐 ?뚯뒪???깃났`, 'success');
     
   } catch (err) {
@@ -2364,7 +2357,7 @@ function toggleApiKeyField() {
     hint.innerHTML = '<a href="https://aistudio.google.com/apikey" target="_blank" style="color:var(--info);text-decoration:none;">Google AI Studio</a>?먯꽌 臾대즺濡?諛쒓툒諛쏆쓣 ???덉뒿?덈떎.';
   } else {
     input.placeholder = 'sk-ant-...';
-    hint.innerHTML = '濡쒖뺄 ?섍꼍?먯꽌??<a href="https://console.anthropic.com/settings/keys" target="_blank" style="color:var(--info);text-decoration:none;">Anthropic API ??/a>媛 ?꾩슂?⑸땲?? claude.ai ?댁뿉?쒕뒗 ?먮룞 ?곌껐?⑸땲??';
+    hint.innerHTML = '로컬 사용시는 <a href="https://console.anthropic.com/settings/keys" target="_blank" style="color:var(--info);text-decoration:none;">Anthropic API ??/a>媛 ?꾩슂?⑸땲?? claude.ai ?댁뿉?쒕뒗 ?먮룞 ?곌껐?⑸땲??';
   }
   updateApiKeyStatus();
 }
@@ -2441,7 +2434,7 @@ benchmarkFileInput.addEventListener('change', async e => {
     showToast('벤치마크 JSON을 불러왔습니다.');
   } catch (err) {
     console.error(err);
-    showToast('踰ㅼ튂留덊겕 JSON???쎌? 紐삵뻽?듬땲??');
+        showToast('벤치마크 JSON 파일이 비어있습니다.');
   }
 });
 
@@ -3028,15 +3021,15 @@ function learnFromBenchmarkDiff() {
 function learnOnly() {
   const count = learnFromBenchmarkDiff();
   if (count > 0) {
-    showToast(`학습 데이터 ${getLearningDBStats().total}개를 모두 삭제할까요?`);
+    showToast(`✨ ${count}개 장면 학습 완료 (전체 ${getLearningDBStats().total}개)`);
   } else {
-    showToast('?숈뒿??李⑥씠媛 ?놁뒿?덈떎. 踰ㅼ튂留덊겕?먯꽌 ?由???ぉ???섏젙?댁＜?몄슂.');
+    showToast('학습 이력이 없습니다. 벤치마크에서 장면을 설정해주세요.');
   }
 }
 
 function exportBenchmark() {
   if (!benchmarkData?.scenes?.length) {
-    showToast('?대낫??踰ㅼ튂留덊겕媛 ?놁뒿?덈떎.');
+    showToast('내보낼 벤치마크가 없습니다.');
     return;
   }
 
@@ -3052,8 +3045,8 @@ function exportBenchmark() {
     'application/json'
   );
   const msg = learnedCount > 0
-    ? `학습 데이터 ${getLearningDBStats().total}개를 모두 삭제할까요?`
-    : 'JSON ????꾨즺';
+    ? `JSON 저장 완료 · ${learnedCount}개 장면 학습됨 (전체 ${getLearningDBStats().total}개)`
+    : 'JSON 저장 완료';
   showToast(msg);
 }
 
@@ -3111,7 +3104,7 @@ function updateBenchmarkSceneField(index, field, value) {
   if (field === 'startTime' || field === 'endTime') {
     const parsed = parseTimecodeInput(value);
     if (parsed === null) {
-      showToast('?쒓컙肄붾뱶 ?뺤떇???щ컮瑜댁? ?딆뒿?덈떎.');
+      showToast('시간 형식이 올바르지 않습니다.');
       renderBenchmarkSection();
       return;
     }
@@ -3182,7 +3175,7 @@ function compareCurrentToBenchmark(showNotification = true) {
     return;
   }
   if (!scenes.length) {
-    if (showNotification) showToast('鍮꾧탳???ㅽ넗由щ낫??寃곌낵媛 ?놁뒿?덈떎.');
+  if (showNotification) showToast('비교할 스토리보드 결과가 없습니다.');
     return;
   }
 
@@ -3250,7 +3243,7 @@ function compareCurrentToBenchmark(showNotification = true) {
 
   renderBenchmarkSection();
   if (showNotification) {
-    showToast(`踰ㅼ튂留덊겕 鍮꾧탳 ?꾨즺 쨌 overall ${Math.round(overall * 100)}%`);
+  showToast(`벤치마크 비교 완료 · overall ${Math.round(overall * 100)}%`);
   }
 }
 
@@ -3824,7 +3817,7 @@ function compareCurrentToBenchmark(showNotification = true) {
   renderBenchmarkSection();
   renderLearningStats();
   if (showNotification) {
-    showToast(`鍮꾧탳 ?꾨즺. ?뺥솗??${Math.round(overall * 100)}% (?섏젙 ??JSON ??ν븯硫??숈뒿?⑸땲??`);
+  showToast(`비교 완료. 정확도 ${Math.round(overall * 100)}% (정답 JSON 저장하면 학습됩니다)`);
   }
 }
 
@@ -9255,33 +9248,33 @@ h1{font-size:28px;margin-bottom:4px}
 .cam-detail{font-size:12px;color:#777;line-height:1.6;margin-top:6px}
 .divider{border:0;border-top:1px solid #eee;margin:10px 0}
 </style></head><body>
-<h1>?뱥 ?ㅽ넗由щ낫????${videoFile.name}</h1>
-<div class="meta">珥?${scenes.length}媛??λ㈃ 쨌 ${formatTime(videoDuration)} 쨌 StoryFrame?쇰줈 ?앹꽦</div>
+<h1>🎬 스토리보드 - ${videoFile.name}</h1>
+<div class="meta">총 ${scenes.length}개 장면 · ${formatTime(videoDuration)} · StoryFrame으로 생성</div>
 ${scenes.map(s => {
   const cam = s.camera || {};
   return `
 <div class="scene">
   <img src="${s.image}">
   <div class="scene-info">
-    <h3>?λ㈃ ${s.index} <span class="badge ${s.transition}">${s.transition.toUpperCase()}</span></h3>
-    <div class="tc">${formatTimecode(s.startTime)} ??${formatTimecode(s.endTime)} (${s.duration.toFixed(1)}s)</div>
+    <h3>장면 ${s.index} <span class="badge ${s.transition}">${s.transition.toUpperCase()}</span></h3>
+    <div class="tc">${formatTimecode(s.startTime)} → ${formatTimecode(s.endTime)} (${s.duration.toFixed(1)}s)</div>
     <div class="cam-tags">
-      ${cam.shotSize ? `<span class="cam-tag cam-tag-shot">?뱪 ${cam.shotSize}</span>` : ''}
-      ${cam.lensType ? `<span class="cam-tag cam-tag-lens">?뵯 ${cam.lensType}</span>` : ''}
-      ${cam.movement ? `<span class="cam-tag cam-tag-movement">?렗 ${cam.movement}</span>` : ''}
-      ${cam.angle ? `<span class="cam-tag cam-tag-angle">?벜 ${cam.angle}</span>` : ''}
-      ${cam.dof ? `<span class="cam-tag cam-tag-dof">?렞 ${cam.dof}</span>` : ''}
-      ${cam.lightingCondition ? `<span class="cam-tag" style="background:#fff1d8;color:#8a6400">?뮕 ${buildLightingSummary(cam) || `${cam.lightingType ? cam.lightingType + ' ' : ''}${cam.lightingCondition}`}</span>` : ''}
-      ${cam.composition ? `<span class="cam-tag" style="background:#d8fff1;color:#1c6b55">?뼹 ${cam.composition}</span>` : ''}
+      ${cam.shotSize ? `<span class="cam-tag cam-tag-shot">📷 ${cam.shotSize}</span>` : ''}
+      ${cam.lensType ? `<span class="cam-tag cam-tag-lens">🔭 ${cam.lensType}</span>` : ''}
+      ${cam.movement ? `<span class="cam-tag cam-tag-movement">🎬 ${cam.movement}</span>` : ''}
+      ${cam.angle ? `<span class="cam-tag cam-tag-angle">📐 ${cam.angle}</span>` : ''}
+      ${cam.dof ? `<span class="cam-tag cam-tag-dof">🌊 ${cam.dof}</span>` : ''}
+      ${cam.lightingCondition ? `<span class="cam-tag" style="background:#fff1d8;color:#8a6400">💡 ${buildLightingSummary(cam) || `${cam.lightingType ? cam.lightingType + ' ' : ''}${cam.lightingCondition}`}</span>` : ''}
+      ${cam.composition ? `<span class="cam-tag" style="background:#d8fff1;color:#1c6b55">🖼 ${cam.composition}</span>` : ''}
     </div>
     ${(cam.shotSizeDetail || cam.lensDetail || cam.movementDetail || cam.dofDetail || cam.lightingDetail || cam.compositionDetail) ? `
     <div class="cam-detail">
-      ${cam.shotSizeDetail ? `<b>??</b> ${cam.shotSizeDetail}<br>` : ''}
-      ${cam.lensDetail ? `<b>?뚯쫰:</b> ${cam.lensDetail}<br>` : ''}
-      ${cam.movementDetail ? `<b>臾대튃:</b> ${cam.movementDetail}<br>` : ''}
-      ${cam.dofDetail ? `<b>?щ룄:</b> ${cam.dofDetail}<br>` : ''}
-      ${cam.lightingDetail ? `<b>Lighting:</b> ${cam.lightingDetail}<br>` : ''}
-      ${cam.compositionDetail ? `<b>援щ룄:</b> ${cam.compositionDetail}` : ''}
+      ${cam.shotSizeDetail ? `<b>샷:</b> ${cam.shotSizeDetail}<br>` : ''}
+      ${cam.lensDetail ? `<b>렌즈:</b> ${cam.lensDetail}<br>` : ''}
+      ${cam.movementDetail ? `<b>무빙:</b> ${cam.movementDetail}<br>` : ''}
+      ${cam.dofDetail ? `<b>심도:</b> ${cam.dofDetail}<br>` : ''}
+      ${cam.lightingDetail ? `<b>조명:</b> ${cam.lightingDetail}<br>` : ''}
+      ${cam.compositionDetail ? `<b>구도:</b> ${cam.compositionDetail}` : ''}
     </div>` : ''}
     <hr class="divider">
     <div class="desc">${s.description}</div>
@@ -9291,7 +9284,7 @@ ${scenes.map(s => {
 <p style="text-align:center;color:#aaa;margin-top:40px;font-size:12px">Generated by StoryFrame</p>
 ${currentScenario ? `
 <div style="margin-top:48px;padding-top:32px;border-top:2px solid #eee">
-<h2 style="font-size:22px;margin-bottom:16px">?뱷 ?쒕굹由ъ삤</h2>
+<h2 style="font-size:22px;margin-bottom:16px">📝 시나리오</h2>
 <div style="white-space:pre-wrap;line-height:2;color:#444;font-size:14px">${currentScenario.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div>
 </div>` : ''}
 </body></html>`;
