@@ -1035,6 +1035,47 @@ select.setting-input {
   font-size: 13px;
 }
 
+.image-modal {
+  background: rgba(20, 22, 30, 0.96);
+  max-width: min(96vw, 1200px);
+  width: auto;
+  padding: 16px;
+}
+
+.image-modal img {
+  display: block;
+  max-width: min(92vw, 1200px);
+  max-height: 78vh;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: #0d0f14;
+}
+
+.image-modal-caption {
+  margin-top: 12px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  text-align: center;
+}
+
+.benchmark-thumb {
+  width: 90px;
+  height: 52px;
+  object-fit: cover;
+  border-radius: 6px;
+  display: block;
+  margin-bottom: 6px;
+  border: 1px solid var(--border);
+  cursor: zoom-in;
+  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.benchmark-thumb:hover {
+  transform: scale(1.04);
+  border-color: rgba(77, 196, 240, 0.7);
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.28);
+}
+
 /* Timeline strip */
 .timeline-strip {
   margin-bottom: 24px;
@@ -1907,6 +1948,14 @@ select.setting-input {
   </div>
 </div>
 
+<div class="modal-overlay" id="benchmarkThumbModal" onclick="if (event.target === this) hideBenchmarkThumbnailModal()">
+  <div class="modal image-modal">
+    <img id="benchmarkThumbModalImage" alt="벤치마크 썸네일 확대">
+    <div class="image-modal-caption" id="benchmarkThumbModalCaption"></div>
+    <button class="modal-close" onclick="hideBenchmarkThumbnailModal()">닫기</button>
+  </div>
+</div>
+
 <!-- Split Scene Modal -->
 <div id="splitSceneModal">
   <div class="split-dialog">
@@ -2596,7 +2645,7 @@ async function loadPhoto(file) {
     }];
 
     document.getElementById('videoName').textContent = file.name;
-    document.getElementById('videoMeta').textContent = `${img.naturalWidth}x${img.naturalHeight} / PHOTO / ${(file.size / (1024 * 1024)).toFixed(1)}MB`;
+    document.getElementById('videoMeta').textContent = `${img.naturalWidth}x${img.naturalHeight} / 사진 / ${(file.size / (1024 * 1024)).toFixed(1)}MB`;
     uploadSection.style.display = 'none';
     workspace.classList.add('active');
     headerActions.style.display = 'flex';
@@ -3963,7 +4012,7 @@ function renderBenchmarkTable() {
     return `
       <tr class="benchmark-row" data-status="${comparisonRow?.status || 'neutral'}">
         <td>
-          ${thumb ? `<img src="${thumb}" style="width:90px;height:52px;object-fit:cover;border-radius:6px;display:block;margin-bottom:6px;border:1px solid var(--border);">` : ''}
+          ${thumb ? `<img src="${thumb}" class="benchmark-thumb" alt="벤치마크 썸네일 S${index + 1}" title="클릭해서 확대" onclick='showBenchmarkThumbnailModal(${JSON.stringify(thumb)}, ${JSON.stringify(`벤치마크 장면 S${index + 1}`)})'>` : ''}
           <div style="font-family:'JetBrains Mono',monospace;font-weight:600;margin-bottom:6px;">S${index + 1}</div>
           <button class="btn" style="padding:5px 8px;font-size:11px;" onclick="deleteBenchmarkScene(${index})">삭제</button>
         </td>
@@ -4876,34 +4925,36 @@ function getColorLabel(r, g, b) {
 
 function generateLocalDescription(scene) {
   const dur = scene.duration.toFixed(1);
-  const bright = scene.brightness > 0.6 ? 'bright' : scene.brightness < 0.3 ? 'dark' : 'mid-brightness';
+  const bright = scene.brightness > 0.6 ? '밝은' : scene.brightness < 0.3 ? '어두운' : '중간 밝기의';
   const _transDesc = {
-    'cut': 'cut transition',
-    'match-cut': 'match cut',
-    'action-cut': 'action cut',
-    'jump-cut': 'jump cut',
-    'smash-cut': 'smash cut',
-    'cross-cut': 'cross cut',
-    'graphic-cut': 'graphic match cut',
-    'flash': 'flash cut',
-    'dissolve': 'dissolve',
-    'match-dissolve': 'match dissolve',
-    'fade': 'fade',
-    'fade-white': 'fade to white',
-    'defocus': 'defocus transition',
-    'wipe': 'wipe',
-    'iris': 'iris transition',
-    'whip-pan': 'whip pan',
-    'zoom': 'zoom transition',
+    'cut': '컷 전환',
+    'match-cut': '매치 컷',
+    'action-cut': '액션 컷',
+    'jump-cut': '점프 컷',
+    'smash-cut': '스매시 컷',
+    'cross-cut': '크로스 컷',
+    'graphic-cut': '그래픽 매치 컷',
+    'flash': '플래시 컷',
+    'dissolve': '디졸브',
+    'match-dissolve': '매치 디졸브',
+    'fade': '페이드',
+    'fade-white': '화이트 페이드',
+    'defocus': '디포커스 전환',
+    'wipe': '와이프',
+    'iris': '아이리스 전환',
+    'whip-pan': '휩팬',
+    'zoom': '줌 전환',
     'l-cut': 'L-cut',
     'j-cut': 'J-cut',
   };
-  const transition = _transDesc[scene.transition] || `${scene.transition || 'CUT'} transition`;
+  const transition = _transDesc[scene.transition] || `${scene.transition || '컷'} 전환`;
   const cam = scene.camera || {};
-  const shotLabel = cam.shotSize && cam.shotSize !== 'Unknown' ? ` ${cam.shotSize} framing` : '';
-  const movement = (cam.movement || '').toLowerCase();
-  const moveLabel = movement && movement !== 'static' ? ` with ${cam.movement} movement` : ' with a static camera';
-  return `${bright} ${scene.colorDominant}${shotLabel}${moveLabel}. It lasts ${dur}s and begins with a ${transition}.`;
+  const shotLabel = cam.shotSize && cam.shotSize !== 'Unknown' ? ` ${getDisplayValue('shotSize', cam.shotSize)} 구도` : '';
+  const movement = cam.movement || '';
+  const moveLabel = movement && movement !== 'Static'
+    ? `${getDisplayValue('movement', movement)} 무빙`
+    : '고정 카메라';
+  return `${bright} ${getDisplayColorDominant(scene.colorDominant)}${shotLabel}와 ${moveLabel}가 읽히는 장면입니다. 길이는 ${dur}초이고 시작 전환은 ${transition}입니다.`;
 }
 
 // ===== LOCAL HEURISTIC CAMERA ANALYSIS ENGINE =====
@@ -6029,6 +6080,359 @@ function buildLightingDetail(lighting) {
   if (hasUsefulNumber(rimStrength) && rimStrength > 0.2) sentences.push(`Rim separation is visible at about ${Math.round(rimStrength * 100)}%.`);
   if (hasUsefulNumber(mixedColorContrast) && mixedColorContrast > 0.28) sentences.push('Warm/cool source separation is noticeable.');
   return sentences.join(' ');
+}
+
+const CAMERA_DISPLAY_MAPS = {
+  shotSize: {
+    ECU: '익스트림 클로즈업',
+    BCU: '빅 클로즈업',
+    CU: '클로즈업',
+    MCU: '미디엄 클로즈업',
+    MS: '미디엄샷',
+    Cowboy: '카우보이샷',
+    MLS: '미디엄 롱샷',
+    FS: '풀샷',
+    LS: '롱샷',
+    ELS: '익스트림 롱샷',
+    Establishing: '설정샷',
+    INSERT: '인서트'
+  },
+  framing: {
+    Single: '단독',
+    'Two-shot': '투샷',
+    'Three-shot': '3인 샷',
+    OTS: '숄더 너머',
+    POV: '시점샷',
+    Crowd: '군중',
+    Empty: '인물 없음'
+  },
+  lensType: {
+    'Ultra-wide(<16mm)': '초광각(<16mm)',
+    'Wide(16-35mm)': '광각(16-35mm)',
+    'Normal(35-60mm)': '표준(35-60mm)',
+    'Telephoto(60-135mm)': '망원(60-135mm)',
+    'Super-telephoto(>135mm)': '초망원(135mm+)',
+    Macro: '매크로'
+  },
+  movement: {
+    Static: '고정',
+    Pan: '팬',
+    'Whip-pan': '휩팬',
+    Tilt: '틸트',
+    'Push-in': '푸시인',
+    'Pull-out': '풀아웃',
+    Tracking: '트래킹',
+    Trucking: '트럭',
+    Arc: '아크',
+    Crane: '크레인',
+    Pedestal: '페데스털',
+    Handheld: '핸드헬드',
+    Steadicam: '스테디캠',
+    'Zoom-in': '줌인',
+    'Zoom-out': '줌아웃',
+    'Dolly-zoom': '돌리줌',
+    'Rack-focus': '랙포커스',
+    Drone: '드론'
+  },
+  movementDirection: {
+    left: '왼쪽',
+    right: '오른쪽',
+    up: '위쪽',
+    down: '아래쪽',
+    in: '안쪽',
+    out: '바깥쪽',
+    clockwise: '시계 방향',
+    'counter-clockwise': '반시계 방향'
+  },
+  movementSpeed: {
+    none: '정지',
+    slow: '느림',
+    medium: '보통',
+    fast: '빠름',
+    'very-fast': '매우 빠름'
+  },
+  angle: {
+    Overhead: '오버헤드',
+    High: '하이앵글',
+    'Eye-level': '아이레벨',
+    'Shoulder-level': '숄더 레벨',
+    Low: '로우앵글',
+    'Worms-eye': '웜즈아이',
+    Dutch: '더치앵글',
+    Aerial: '항공 시점'
+  },
+  dof: {
+    Deep: '깊은 심도',
+    Moderate: '중간 심도',
+    Shallow: '얕은 심도',
+    'Very-shallow': '매우 얕은 심도',
+    'Soft-focus': '소프트 포커스',
+    'Tilt-shift': '틸트시프트'
+  },
+  dofFocusPlane: {
+    foreground: '전경',
+    midground: '중경',
+    background: '배경',
+    'pan-focus': '팬포커스'
+  },
+  lightingType: {
+    Natural: '자연광',
+    Artificial: '인공광',
+    Mixed: '혼합광',
+    Practical: '실내광'
+  },
+  lightingCondition: {
+    'High-key': '하이키',
+    'Low-key': '로우키',
+    Silhouette: '실루엣',
+    Chiaroscuro: '키아로스쿠로',
+    Flat: '플랫',
+    Rembrandt: '렘브란트'
+  },
+  lightingDirection: {
+    Back: '역광',
+    'Top-left': '좌상단',
+    Top: '상단',
+    'Top-right': '우상단',
+    Left: '좌측',
+    Right: '우측',
+    Front: '정면',
+    Bottom: '하단'
+  },
+  lightingHardness: {
+    Soft: '부드러운',
+    Mixed: '혼합',
+    Hard: '하드'
+  },
+  lightingContrast: {
+    Low: '낮은',
+    Medium: '중간',
+    High: '높은',
+    Extreme: '극대'
+  },
+  lightingColorTemp: {
+    'Very-warm': '매우 따뜻함',
+    Warm: '따뜻함',
+    Neutral: '중립',
+    Cool: '차가움',
+    'Very-cool': '매우 차가움'
+  },
+  lightingMotivation: {
+    Window: '창광',
+    Practical: '실내광',
+    Ambient: '주변광',
+    Sunlight: '태양광',
+    Studio: '스튜디오',
+    'Mixed-source': '혼합광원'
+  },
+  lightingSubtype: {
+    Split: '스플릿',
+    Butterfly: '버터플라이',
+    'Golden-hour': '골든아워',
+    'Blue-hour': '블루아워',
+    Overcast: '흐린광',
+    'Rim-lit': '림라이트',
+    'Window-lit': '창문광',
+    'Neon-mixed': '네온 혼합'
+  },
+  composition: {
+    'Rule-of-thirds': '삼등분 구도',
+    'Center-framed': '센터 프레이밍',
+    Symmetrical: '대칭 구도',
+    'Leading-lines': '리딩 라인',
+    'Frame-within-frame': '프레임 인 프레임',
+    'Negative-space': '네거티브 스페이스',
+    'Golden-ratio': '황금비',
+    Diagonal: '대각 구도',
+    'Vanishing-point': '소실점 구도',
+    Layered: '레이어드',
+    Environmental: '환경 구도',
+    'Dynamic-tension': '긴장 구도'
+  },
+  compositionBalance: {
+    Symmetric: '대칭',
+    Dynamic: '다이내믹',
+    Asymmetric: '비대칭'
+  },
+  compositionDepth: {
+    Layered: '레이어드',
+    '2-plane': '2단 레이어',
+    Flat: '평면'
+  },
+  mechanism: {
+    Tripod: '삼각대',
+    Dolly: '돌리',
+    Steadicam: '스테디캠',
+    Gimbal: '짐벌',
+    Handheld: '핸드헬드',
+    Crane: '크레인',
+    Jib: '지브',
+    Drone: '드론',
+    Slider: '슬라이더',
+    Snorricam: '스노리캠'
+  }
+};
+
+const COLOR_DOMINANT_LABELS = {
+  'bright tones': '밝은 톤',
+  'dark tones': '어두운 톤',
+  'warm tones': '따뜻한 톤',
+  'cool tones': '차가운 톤',
+  'green tones': '녹색 계열',
+  'neutral tones': '중립 톤'
+};
+
+const TRANSITION_TEXT_LABELS = {
+  'cut transition': '컷 전환',
+  'match cut': '매치 컷',
+  'action cut': '액션 컷',
+  'jump cut': '점프 컷',
+  'smash cut': '스매시 컷',
+  'cross cut': '크로스 컷',
+  'graphic match cut': '그래픽 매치 컷',
+  'flash cut': '플래시 컷',
+  dissolve: '디졸브',
+  'match dissolve': '매치 디졸브',
+  fade: '페이드',
+  'fade to white': '화이트 페이드',
+  'defocus transition': '디포커스 전환',
+  wipe: '와이프',
+  'iris transition': '아이리스 전환',
+  'whip pan': '휩팬',
+  'zoom transition': '줌 전환',
+  'L-cut': 'L-cut',
+  'J-cut': 'J-cut'
+};
+
+function getDisplayValue(kind, value) {
+  if (!value) return value || '';
+  return CAMERA_DISPLAY_MAPS[kind]?.[value] || value;
+}
+
+function getDisplayColorDominant(value) {
+  if (!value) return '미상';
+  return COLOR_DOMINANT_LABELS[value] || value;
+}
+
+function buildLightingSummaryDisplay(lighting) {
+  if (!lighting) return '';
+  const colorTemp = pickValue(lighting.lightingColorTemp, lighting.colorTemp);
+  const parts = [];
+  const base = [getDisplayValue('lightingType', lighting.lightingType), getDisplayValue('lightingCondition', lighting.lightingCondition)].filter(Boolean).join(' ').trim();
+  if (base) parts.push(base);
+  if (lighting.lightingSubtype) parts.push(getDisplayValue('lightingSubtype', lighting.lightingSubtype));
+  if (lighting.lightingDirection && lighting.lightingDirection !== 'Front') parts.push(`${getDisplayValue('lightingDirection', lighting.lightingDirection)} 키`);
+  if (lighting.lightingHardness && lighting.lightingHardness !== 'Mixed') parts.push(`${getDisplayValue('lightingHardness', lighting.lightingHardness)} 광질`);
+  if (lighting.lightingContrast && lighting.lightingContrast !== 'Medium') parts.push(`${getDisplayValue('lightingContrast', lighting.lightingContrast)} 콘트라스트`);
+  if (colorTemp && colorTemp !== 'Neutral') parts.push(getDisplayValue('lightingColorTemp', colorTemp));
+  if (lighting.lightingMotivation && lighting.lightingMotivation !== 'Studio') parts.push(`${getDisplayValue('lightingMotivation', lighting.lightingMotivation)} 동기`);
+  return parts.join(' / ');
+}
+
+function localizeCameraText(text) {
+  if (!hasMeaningfulText(text)) return text || '';
+  let out = text.trim();
+
+  const replacements = [
+    [/^(bright|dark|mid-brightness) (.+?)(?: ([A-Z]+) framing)? with (a static camera|.+? movement)\. It lasts ([0-9.]+)s and begins with a (.+)\.$/i, (_, brightness, color, shot, movement, dur, transition) => {
+      const brightnessLabel = { bright: '밝은', dark: '어두운', 'mid-brightness': '중간 밝기의' }[brightness] || brightness;
+      const colorLabel = getDisplayColorDominant(color);
+      const shotLabel = shot ? ` ${getDisplayValue('shotSize', shot)} 구도` : '';
+      const moveLabel = movement === 'a static camera'
+        ? '고정 카메라'
+        : `${getDisplayValue('movement', movement.replace(/ movement$/i, ''))} 무빙`;
+      const transitionLabel = TRANSITION_TEXT_LABELS[transition] || transition;
+      return `${brightnessLabel} ${colorLabel}${shotLabel}와 ${moveLabel}가 읽히는 장면입니다. 길이는 ${dur}초이고 시작 전환은 ${transitionLabel}입니다.`;
+    }],
+    [/(?:Too few|Not enough) comparison frames were available, so (?:the )?motion defaults to Static\./g, '비교 가능한 프레임이 충분하지 않아 무빙은 고정으로 판정했습니다.'],
+    [/Motion analysis failed, so the result falls back to Static\./g, '무빙 분석에 실패해 고정 샷으로 기본 판정했습니다.'],
+    [/Inter-frame alignment changes are minimal, which is most consistent with a locked-off camera\./g, '프레임 간 정렬 변화가 거의 없어 고정 카메라에 가깝습니다.'],
+    [/Inter-frame motion stays near zero, which is most consistent with a locked-off shot\./g, '프레임 간 움직임이 거의 없어 고정 샷에 가깝습니다.'],
+    [/Camera position stays stable while focus-plane sharpness shifts, which fits rack focus\./g, '카메라 위치는 유지된 채 초점면만 이동해 랙포커스로 보입니다.'],
+    [/The frame centers on a small detailed subject with little surrounding context, which fits an insert shot\./g, '주변 맥락보다 작은 디테일 대상이 프레임 중심을 차지해 인서트 샷에 가깝습니다.'],
+    [/The face or subject fills a large portion of the frame, which fits a close-up\./g, '얼굴이나 피사체가 프레임을 크게 차지해 클로즈업에 가깝습니다.'],
+    [/The subject reads closer than medium shot but looser than a close-up, which fits MCU\./g, '미디엄샷보다 가깝고 클로즈업보다는 여유가 있어 미디엄 클로즈업에 가깝습니다.'],
+    [/Environmental information dominates over the subject, which fits an extreme long shot\./g, '피사체보다 환경 정보가 더 강하게 읽혀 익스트림 롱샷에 가깝습니다.'],
+    [/The framing reads as a middle-distance shot, so it falls back to MS\./g, '프레이밍 단서가 중간 거리 샷에 가까워 미디엄샷으로 기본 판정했습니다.'],
+    [/The subject dominates the frame while the background compresses heavily \(([^)]+)\), which fits a super-telephoto lens\./g, '피사체가 프레임을 강하게 점유하고 배경 압축이 $1 수준으로 커서 초망원 렌즈에 가깝습니다.'],
+    [/Strong vignetting with shallow focus is more consistent with a telephoto or portrait-oriented lens\./g, '비네팅과 얕은 초점 분리가 강해 망원 계열 인물 렌즈에 가깝습니다.'],
+    [/Moderate depth separation without extreme compression is closest to a normal lens\./g, '과도한 원근 압축 없이 적당한 심도 분리가 보여 표준 렌즈에 가깝습니다.'],
+    [/Uniform sharpness across the frame is more consistent with a wide lens or deep-focus setup\./g, '프레임 전반의 선예도가 고르게 유지되어 광각 또는 딥포커스 세팅에 가깝습니다.'],
+    [/The image reads as balanced and moderate rather than clearly wide or telephoto\./g, '화각 인상이 과하게 넓거나 압축되지 않아 표준 렌즈 쪽으로 읽힙니다.'],
+    [/Lens cues are mixed, so the fallback stays in the normal range\./g, '렌즈 단서가 혼재해 표준 렌즈 영역으로 기본 판정했습니다.'],
+    [/Brighter upper regions and top-heavy framing suggest a low-angle view\./g, '상단 밝기와 상부 치우침이 강해 로우앵글 시점에 가깝습니다.'],
+    [/Brighter lower regions and bottom-heavy framing suggest a high-angle view\./g, '하단 밝기와 하부 치우침이 강해 하이앵글 시점에 가깝습니다.'],
+    [/A strong top-vs-bottom brightness split suggests an overhead or bird-eye view\./g, '상하 밝기 차가 커 오버헤드 또는 버드아이 시점에 가깝습니다.'],
+    [/Left-right imbalance suggests a dutch angle or tilted framing\./g, '좌우 불균형이 커 더치앵글 또는 기울어진 프레이밍으로 읽힙니다.'],
+    [/The subject sits slightly low in frame, which reads closer to shoulder-level coverage\./g, '피사체 위치가 프레임에서 다소 낮아 숄더 레벨 구도에 가깝습니다.'],
+    [/There is no strong vertical bias, so the angle falls back to eye level\./g, '뚜렷한 상하 시점 편향이 없어 아이레벨로 기본 판정했습니다.'],
+    [/Center sharpness dominates strongly over the rest of the frame, indicating very shallow depth of field\./g, '중앙 선예도가 프레임 전반보다 강하게 우세해 매우 얕은 심도로 보입니다.'],
+    [/Subject sharpness separates clearly from the background, which fits shallow depth of field\./g, '피사체 선예도가 배경과 뚜렷하게 분리되어 얕은 심도에 가깝습니다.'],
+    [/The subject is sharper than the background, but the separation is moderate\./g, '피사체가 배경보다 선명하지만 분리 정도는 중간 수준입니다.'],
+    [/Sharpness stays relatively even across the frame, which fits deep depth of field\./g, '프레임 전반의 선예도가 비교적 고르게 유지되어 깊은 심도로 보입니다.'],
+    [/Strong left-right balance (\d+%) with a centered anchor at \(([^)]+)\)\./g, '좌우 균형이 $1로 강하고 시선 중심이 ($2)에 놓여 중앙 구도가 두드러집니다.'],
+    [/The subject mass sits near the center at \(([^)]+)\), with center weighting (\d+%)\./g, '피사체 중심이 ($1) 부근에 있고 중앙 가중치가 $2로 높습니다.'],
+    [/The anchor lands near a thirds hotspot \(([^)]+)\), keeping the frame off-center\./g, '시선 앵커가 삼등분 핫스팟($1) 근처에 있어 비대칭 균형을 만듭니다.'],
+    [/The anchor aligns with a golden-ratio hotspot \(([^)]+)\) at \(([^)]+)\)\./g, '시선 앵커가 황금비 핫스팟($1)에 맞고 위치는 ($2)입니다.'],
+    [/Directional lines flow at (\d+%) and guide attention toward the subject\./g, '방향선 흐름이 $1 수준으로 피사체 쪽 시선을 유도합니다.'],
+    [/Axis-aligned enclosure strength is (\d+%), creating a frame-within-frame effect around the subject\./g, '축 정렬형 둘러싸기 강도가 $1로 프레임 인 프레임 효과를 만듭니다.'],
+    [/The subject anchor sits at \(([^)]+)\) with side openness (\d+%) and sparse-frame ratio (\d+%)\./g, '피사체 앵커는 ($1)에 있고 측면 개방도 $2, 여백 비율 $3로 네거티브 스페이스가 형성됩니다.'],
+    [/Primary read:/g, '주요 판독:'],
+    [/Key\/fill sits near ([0-9.]+:1)\./g, '키와 필 비율은 약 $1입니다.'],
+    [/Rim separation is visible at about (\d+%)\./g, '림 분리는 약 $1 수준으로 보입니다.'],
+    [/Warm\/cool source separation is noticeable\./g, '따뜻한 광원과 차가운 광원의 분리가 뚜렷합니다.'],
+    [/Local cues:/g, '로컬 단서:'],
+    [/Learned override from benchmark memory/g, '벤치마크 학습 보정']
+  ];
+
+  for (const [pattern, replacement] of replacements) {
+    out = out.replace(pattern, replacement);
+  }
+
+  const inlineTerms = [
+    ['Super-telephoto(>135mm)', '초망원(135mm+)'],
+    ['Telephoto(60-135mm)', '망원(60-135mm)'],
+    ['Ultra-wide(<16mm)', '초광각(<16mm)'],
+    ['Wide(16-35mm)', '광각(16-35mm)'],
+    ['Normal(35-60mm)', '표준(35-60mm)'],
+    ['Very-shallow', '매우 얕은 심도'],
+    ['Shoulder-level', '숄더 레벨'],
+    ['Eye-level', '아이레벨'],
+    ['Rule-of-thirds', '삼등분 구도'],
+    ['Center-framed', '센터 프레이밍'],
+    ['Frame-within-frame', '프레임 인 프레임'],
+    ['Negative-space', '네거티브 스페이스'],
+    ['Golden-ratio', '황금비'],
+    ['Symmetrical', '대칭 구도'],
+    ['Leading-lines', '리딩 라인'],
+    ['Practical', '실내광'],
+    ['Chiaroscuro', '키아로스쿠로'],
+    ['Low-key', '로우키'],
+    ['High-key', '하이키'],
+    ['Rembrandt', '렘브란트'],
+    ['Rim-lit', '림라이트'],
+    ['back key', '역광 키'],
+    ['Hard quality', '하드 광질'],
+    ['Soft quality', '부드러운 광질'],
+    ['Mixed quality', '혼합 광질'],
+    ['Extreme contrast', '극대 콘트라스트'],
+    ['High contrast', '높은 콘트라스트'],
+    ['Low contrast', '낮은 콘트라스트'],
+    ['midground', '중경'],
+    ['foreground', '전경'],
+    ['background', '배경'],
+    ['pan-focus', '팬포커스']
+  ];
+
+  for (const [from, to] of inlineTerms) {
+    out = out.replace(new RegExp(from.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), to);
+  }
+
+  return out;
+}
+
+function getDisplaySceneDescription(scene) {
+  return localizeCameraText(scene?.description || '');
 }
 
 function buildLocalEvidenceBlock(camera) {
@@ -7368,7 +7772,7 @@ function estimateShotSize(composition, edgeMap, w, h, focus, faceAnalysis, poseA
     return {
       type,
       confidence: conf,
-      detail: `Pose-guided: subject ${Math.round(subjectHeight * 100)}% tall, face ${Math.round(rawFaceH * 100)}% (adj ${Math.round(faceHeight * 100)}%), crop ${pose.cropLevel}, group ${poseAnalysis.count} ??${type}`,
+      detail: `포즈 기준 추정: 피사체 높이 ${Math.round(subjectHeight * 100)}%, 얼굴 높이 ${Math.round(rawFaceH * 100)}% (보정 ${Math.round(faceHeight * 100)}%), 크롭 ${pose.cropLevel}, 인원 ${poseAnalysis.count}명으로 ${type}에 가깝습니다.`,
       metrics: {
         subjectHeight, subjectArea, faceHeight: rawFaceH, effectiveFaceHeight: faceHeight,
         cropLevel: pose.cropLevel, poseCount: poseAnalysis.count,
@@ -7396,7 +7800,7 @@ function estimateShotSize(composition, edgeMap, w, h, focus, faceAnalysis, poseA
     return {
       type,
       confidence: clamp(faceAnalysis.confidence + 0.04, 0.62, 0.94),
-      detail: `媛먯???理쒕? ?쇨뎬???꾨젅???믪씠??${Math.round(faceHeight * 100)}%, 硫댁쟻??${Math.round(faceArea * 100)}%瑜?李⑥???${type}??媛源앹뒿?덈떎`
+      detail: `얼굴 높이 ${Math.round(faceHeight * 100)}%, 면적 ${Math.round(faceArea * 100)}%로 ${type} 구도에 가깝습니다.`
     };
   }
 
@@ -7417,11 +7821,11 @@ function estimateShotSize(composition, edgeMap, w, h, focus, faceAnalysis, poseA
   }
   if (skinRatio < 0.02 && centerW < 0.24) {
     const t = projH < 0.3 ? 'ELS' : 'LS';
-    return { type: t, confidence: 0.50, detail: `?쇱궗泥대낫??怨듦컙 鍮꾩쨷??而?${t} 怨꾩뿴濡?異붿젙?⑸땲??(?섏쭅?ъ쁺 ${Math.round(projH*100)}%)` };
+    return { type: t, confidence: 0.50, detail: `피사체보다 공간 비중이 더 커 ${t} 계열로 추정됩니다. (투영 높이 ${Math.round(projH*100)}%)` };
   }
   if (skinRatio < 0.04) {
     const t = projH < 0.5 ? 'LS' : projH < 0.75 ? 'FS' : 'MS';
-    return { type: t, confidence: 0.42, detail: `?섏쭅 ?먯? ?ъ쁺 湲곕컲 ${t} 異붿젙 (?ъ쁺 ${Math.round(projH*100)}%)` };
+    return { type: t, confidence: 0.42, detail: `피사체 투영 높이를 기준으로 ${t}에 가깝습니다. (투영 ${Math.round(projH*100)}%)` };
   }
 
   return { type: 'MS', confidence: 0.36, detail: 'The framing reads as a middle-distance shot, so it falls back to MS.' };
@@ -7559,14 +7963,14 @@ function generateLocalCamera() {
   return {
     shotSize: 'MS',
     shotSizeConf: 0,
-    shotSizeDetail: '濡쒖뺄 fallback',
+    shotSizeDetail: '로컬 기본 판정',
     framing: 'Empty',
     lensType: 'Normal(35-60mm)',
     lensConf: 0,
     lensDetail: '',
     movement: 'Static',
     movementConf: 0,
-    movementDetail: 'fallback',
+    movementDetail: '기본 판정',
     angle: 'Eye-level',
     angleConf: 0,
     dof: 'Moderate',
@@ -8663,6 +9067,7 @@ function buildSceneAIPrompts(scene) {
     'You are an expert cinematography analyst.',
     'Internally reason like a panel of specialists in cinematography: director of photography, gaffer, portrait-lighting photographer, colorist, composition coach, and camera operator.',
     'Use standard film-language definitions.',
+    'Keep enum fields in the canonical English labels from the schema, but write description, all *_detail fields, and narrative_purpose in Korean.',
     'Reply with exactly one JSON object and no markdown.'
   ].join(' ');
 
@@ -8700,23 +9105,23 @@ ${localEvidence}
 
 Return JSON only with this schema:
 {
-  "description": "3-4 sentences describing subject, environment, mood, lighting, and dramatic purpose",
+  "description": "피사체, 환경, 분위기, 조명, 드라마적 목적을 설명하는 한국어 3-4문장",
   "shot_size": "ECU|BCU|CU|MCU|MS|Cowboy|MLS|FS|LS|ELS|Establishing|INSERT",
   "shot_size_confidence": 0.0,
-  "shot_size_detail": "brief evidence",
+  "shot_size_detail": "한국어 근거",
   "framing": "Single|Two-shot|Three-shot|OTS|POV|Crowd|Empty",
   "camera_angle": "Overhead|High|Eye-level|Shoulder-level|Low|Worms-eye|Dutch|Aerial",
   "angle_confidence": 0.0,
   "lens_type": "Ultra-wide(<16mm)|Wide(16-35mm)|Normal(35-60mm)|Telephoto(60-135mm)|Super-telephoto(>135mm)|Macro",
   "lens_confidence": 0.0,
-  "lens_detail": "brief evidence",
+  "lens_detail": "한국어 근거",
   "camera_movement": "Static|Pan|Whip-pan|Tilt|Push-in|Pull-out|Tracking|Trucking|Arc|Crane|Pedestal|Handheld|Steadicam|Zoom-in|Zoom-out|Dolly-zoom|Rack-focus|Drone",
   "movement_confidence": 0.0,
-  "movement_detail": "brief evidence",
+  "movement_detail": "한국어 근거",
   "camera_mechanism": "Tripod|Dolly|Steadicam|Gimbal|Handheld|Crane|Jib|Drone|Slider|Snorricam",
   "depth_of_field": "Deep|Moderate|Shallow|Very-shallow",
   "dof_confidence": 0.0,
-  "dof_detail": "brief evidence",
+  "dof_detail": "한국어 근거",
   "lighting_type": "Natural|Artificial|Mixed|Practical",
   "lighting_condition": "High-key|Low-key|Silhouette|Chiaroscuro|Flat|Rembrandt",
   "lighting_confidence": 0.0,
@@ -8726,11 +9131,11 @@ Return JSON only with this schema:
   "lighting_color_temp": "Very-warm|Warm|Neutral|Cool|Very-cool",
   "lighting_motivation": "Window|Practical|Ambient|Sunlight|Studio|Mixed-source",
   "lighting_subtype": "|Split|Butterfly|Golden-hour|Blue-hour|Overcast|Rim-lit|Window-lit|Neon-mixed",
-  "lighting_detail": "brief evidence",
+  "lighting_detail": "한국어 근거",
   "composition": "Rule-of-thirds|Center-framed|Symmetrical|Leading-lines|Frame-within-frame|Negative-space|Golden-ratio",
   "composition_confidence": 0.0,
-  "composition_detail": "brief evidence",
-  "narrative_purpose": "one short sentence"
+  "composition_detail": "한국어 근거",
+  "narrative_purpose": "한국어 한 문장"
 }`;
 
   return { systemPrompt, analysisPrompt };
@@ -8827,9 +9232,9 @@ function renderStoryboard() {
   
   // Stats
   document.getElementById('totalScenes').textContent = scenes.length;
-  document.getElementById('totalDuration').textContent = currentMediaType === 'photo' ? 'PHOTO' : formatTime(videoDuration);
+  document.getElementById('totalDuration').textContent = currentMediaType === 'photo' ? '사진' : formatTime(videoDuration);
   const avgDur = scenes.length > 0 ? videoDuration / scenes.length : 0;
-  document.getElementById('avgScene').textContent = currentMediaType === 'photo' ? 'STILL' : avgDur.toFixed(1) + 's';
+  document.getElementById('avgScene').textContent = currentMediaType === 'photo' ? '정지 컷' : avgDur.toFixed(1) + 's';
   
   // Timeline
   const timelineStrip = document.querySelector('.timeline-strip');
@@ -8871,7 +9276,7 @@ function renderStoryboard() {
     <div class="scene-card" style="animation-delay: ${i * 0.05}s">
       <div class="scene-thumbnail" onclick="seekTo(${s.startTime})">
         <img src="${s.image}" alt="장면 ${s.index}">
-        <div class="scene-number">SCENE ${s.index}</div>
+        <div class="scene-number">장면 ${s.index}</div>
         <div class="scene-timecode">${formatTimecode(s.startTime)}</div>
         ${i > 0 || (s.transition && s.transition !== 'cut') ? `<div class="scene-transition-badge transition-${s.transition || 'cut'}">${
           TRANSITION_LABELS[s.transition] || (s.transition || 'CUT').toUpperCase()
@@ -8881,7 +9286,7 @@ function renderStoryboard() {
         <div class="scene-meta">
           <div class="meta-tag"><span class="dot"></span> ${formatTimecode(s.startTime)} → ${formatTimecode(s.endTime)}</div>
           <div class="meta-tag">길이 ${s.duration.toFixed(1)}s</div>
-          <div class="meta-tag">Color ${s.colorDominant || 'Unknown'}</div>
+          <div class="meta-tag">색감 ${getDisplayColorDominant(s.colorDominant)}</div>
         </div>
 
         <div class="scene-sections">
@@ -8891,53 +9296,53 @@ function renderStoryboard() {
             <div class="camera-tags">
               ${cam.shotSize ? `<div class="cam-tag cam-tag-shot">
                 <span class="cam-icon">📷</span>
-                <span><span class="cam-label">SHOT</span> ${cam.shotSize}${cam.framing ? ' · ' + cam.framing : ''}</span>
+                <span><span class="cam-label">샷</span> ${getDisplayValue('shotSize', cam.shotSize)}${cam.framing ? ' · ' + getDisplayValue('framing', cam.framing) : ''}</span>
                 ${confDot(cam.shotSizeConf)}
               </div>` : ''}
               ${cam.lensType ? `<div class="cam-tag cam-tag-lens">
                 <span class="cam-icon">🔭</span>
-                <span><span class="cam-label">LENS</span> ${cam.lensType}${cam.lensFocalRange && cam.lensFocalRange !== 'macro' ? ` <span style="opacity:0.55;font-size:10px;">${cam.lensFocalRange}</span>` : ''}</span>
+                <span><span class="cam-label">렌즈</span> ${getDisplayValue('lensType', cam.lensType)}${cam.lensFocalRange && cam.lensFocalRange !== 'macro' ? ` <span style="opacity:0.55;font-size:10px;">${cam.lensFocalRange}</span>` : ''}</span>
                 ${confDot(cam.lensConf)}
               </div>` : ''}
               ${cam.movement ? `<div class="cam-tag cam-tag-movement">
                 <span class="cam-icon">🎬</span>
-                <span><span class="cam-label">MOVE</span> ${cam.movement}${cam.movementDirection ? ` <span style="opacity:0.65;font-size:10px;">${cam.movementDirection}</span>` : ''}${cam.movementSpeed && cam.movementSpeed !== 'none' ? ` <span style="opacity:0.55;font-size:10px;">[${cam.movementSpeed}]</span>` : ''}</span>
+                <span><span class="cam-label">무빙</span> ${getDisplayValue('movement', cam.movement)}${cam.movementDirection ? ` <span style="opacity:0.65;font-size:10px;">${getDisplayValue('movementDirection', cam.movementDirection)}</span>` : ''}${cam.movementSpeed && cam.movementSpeed !== 'none' ? ` <span style="opacity:0.55;font-size:10px;">[${getDisplayValue('movementSpeed', cam.movementSpeed)}]</span>` : ''}</span>
                 ${confDot(cam.movementConf)}
               </div>` : ''}
               ${cam.angle ? `<div class="cam-tag cam-tag-angle">
                 <span class="cam-icon">📐</span>
-                <span><span class="cam-label">ANGLE</span> ${cam.angle}${cam.angleTilt != null && cam.angleTilt !== 0 ? ` <span style="opacity:0.58;font-size:10px;">${cam.angleTilt > 0 ? '+' : ''}${cam.angleTilt}°</span>` : ''}</span>
+                <span><span class="cam-label">앵글</span> ${getDisplayValue('angle', cam.angle)}${cam.angleTilt != null && cam.angleTilt !== 0 ? ` <span style="opacity:0.58;font-size:10px;">${cam.angleTilt > 0 ? '+' : ''}${cam.angleTilt}°</span>` : ''}</span>
                 ${confDot(cam.angleConf)}
               </div>` : ''}
               ${cam.dof ? `<div class="cam-tag cam-tag-dof">
                 <span class="cam-icon">🌊</span>
-                <span><span class="cam-label">DOF</span> ${cam.dof}${cam.dofFocusPlane && cam.dofFocusPlane !== 'pan-focus' ? ` <span style="opacity:0.58;font-size:10px;">${cam.dofFocusPlane}</span>` : ''}${cam.dofSeparation > 0.15 ? ` <span style="opacity:0.50;font-size:10px;">${Math.round(cam.dofSeparation * 100)}%</span>` : ''}</span>
+                <span><span class="cam-label">심도</span> ${getDisplayValue('dof', cam.dof)}${cam.dofFocusPlane && cam.dofFocusPlane !== 'pan-focus' ? ` <span style="opacity:0.58;font-size:10px;">${getDisplayValue('dofFocusPlane', cam.dofFocusPlane)}</span>` : ''}${cam.dofSeparation > 0.15 ? ` <span style="opacity:0.50;font-size:10px;">${Math.round(cam.dofSeparation * 100)}%</span>` : ''}</span>
                 ${confDot(cam.dofConf)}
               </div>` : ''}
               ${cam.lightingCondition ? `<div class="cam-tag" style="background:rgba(255,220,100,0.08);border-color:rgba(255,220,100,0.25);color:#ffd644;">
                 <span class="cam-icon">💡</span>
-                <span><span class="cam-label">LIGHT</span> ${buildLightingSummary(cam) || `${cam.lightingType ? cam.lightingType + ' ' : ''}${cam.lightingCondition}`}</span>
+                <span><span class="cam-label">조명</span> ${buildLightingSummaryDisplay(cam) || `${getDisplayValue('lightingType', cam.lightingType)} ${getDisplayValue('lightingCondition', cam.lightingCondition)}`.trim()}</span>
                 ${cam.lightingConf ? confDot(cam.lightingConf) : ''}
               </div>` : ''}
               ${cam.composition ? `<div class="cam-tag" style="background:rgba(100,255,200,0.08);border-color:rgba(100,255,200,0.25);color:#64ffc8;">
                 <span class="cam-icon">🖼</span>
-                <span><span class="cam-label">COMP</span> ${cam.composition}${cam.compositionSubtype ? ` <span style="opacity:0.55;font-size:10px;">+${cam.compositionSubtype}</span>` : ''}${cam.compositionBalance && cam.compositionBalance !== 'Asymmetric' ? ` <span style="opacity:0.48;font-size:10px;">[${cam.compositionBalance}]</span>` : ''}${cam.compositionDepth && cam.compositionDepth !== 'Flat' ? ` <span style="opacity:0.42;font-size:10px;">[${cam.compositionDepth}]</span>` : ''}</span>
+                <span><span class="cam-label">구도</span> ${getDisplayValue('composition', cam.composition)}${cam.compositionSubtype ? ` <span style="opacity:0.55;font-size:10px;">+${getDisplayValue('composition', cam.compositionSubtype)}</span>` : ''}${cam.compositionBalance && cam.compositionBalance !== 'Asymmetric' ? ` <span style="opacity:0.48;font-size:10px;">[${getDisplayValue('compositionBalance', cam.compositionBalance)}]</span>` : ''}${cam.compositionDepth && cam.compositionDepth !== 'Flat' ? ` <span style="opacity:0.42;font-size:10px;">[${getDisplayValue('compositionDepth', cam.compositionDepth)}]</span>` : ''}</span>
                 ${confDot(cam.compositionConf)}
               </div>` : ''}
               ${cam.mechanism ? `<div class="cam-tag" style="background:rgba(180,180,255,0.08);border-color:rgba(180,180,255,0.25);color:#b4b4ff;">
                 <span class="cam-icon">🛠</span>
-                <span><span class="cam-label">RIG</span> ${cam.mechanism}</span>
+                <span><span class="cam-label">리그</span> ${getDisplayValue('mechanism', cam.mechanism)}</span>
               </div>` : ''}
             </div>
-            ${cam.narrativePurpose ? `<div style="font-size:12px;color:var(--info);margin:6px 0 2px;font-style:italic;">🎯 ${cam.narrativePurpose}</div>` : ''}
+            ${cam.narrativePurpose ? `<div style="font-size:12px;color:var(--info);margin:6px 0 2px;font-style:italic;">🎯 ${localizeCameraText(cam.narrativePurpose)}</div>` : ''}
             ${(cam.shotSizeDetail || cam.lensDetail || cam.movementDetail || cam.dofDetail || cam.lightingDetail || cam.compositionDetail) ? `
             <div class="camera-detail">
-              ${cam.shotSizeDetail ? `<strong>샷:</strong> ${cam.shotSizeDetail}<br>` : ''}
-              ${cam.lensDetail ? `<strong>렌즈:</strong> ${cam.lensDetail}<br>` : ''}
-              ${cam.movementDetail ? `<strong>무빙:</strong> ${cam.movementDetail}<br>` : ''}
-              ${cam.dofDetail ? `<strong>심도:</strong> ${cam.dofDetail}<br>` : ''}
-              ${cam.lightingDetail ? `<strong>조명:</strong> ${cam.lightingDetail}<br>` : ''}
-              ${cam.compositionDetail ? `<strong>구도:</strong> ${cam.compositionDetail}` : ''}
+              ${cam.shotSizeDetail ? `<strong>샷:</strong> ${localizeCameraText(cam.shotSizeDetail)}<br>` : ''}
+              ${cam.lensDetail ? `<strong>렌즈:</strong> ${localizeCameraText(cam.lensDetail)}<br>` : ''}
+              ${cam.movementDetail ? `<strong>무빙:</strong> ${localizeCameraText(cam.movementDetail)}<br>` : ''}
+              ${cam.dofDetail ? `<strong>심도:</strong> ${localizeCameraText(cam.dofDetail)}<br>` : ''}
+              ${cam.lightingDetail ? `<strong>조명:</strong> ${localizeCameraText(cam.lightingDetail)}<br>` : ''}
+              ${cam.compositionDetail ? `<strong>구도:</strong> ${localizeCameraText(cam.compositionDetail)}` : ''}
             </div>` : ''}
           </div>
 
@@ -8946,7 +9351,7 @@ function renderStoryboard() {
           <!-- Scene Description -->
           <div class="scene-description ai-generated">
             <div class="ai-label">🤖 장면 설명</div>
-            ${s.description}
+            ${getDisplaySceneDescription(s)}
           </div>
         </div>
 
@@ -9177,6 +9582,26 @@ function updateProgress(status, percent) {
 function showExportModal() { document.getElementById('exportModal').classList.add('active'); }
 function hideExportModal() { document.getElementById('exportModal').classList.remove('active'); }
 
+function showBenchmarkThumbnailModal(src, caption = '') {
+  if (!src) return;
+  const overlay = document.getElementById('benchmarkThumbModal');
+  const img = document.getElementById('benchmarkThumbModalImage');
+  const captionEl = document.getElementById('benchmarkThumbModalCaption');
+  if (!overlay || !img || !captionEl) return;
+  img.src = src;
+  captionEl.textContent = caption || '벤치마크 썸네일';
+  overlay.classList.add('active');
+}
+
+function hideBenchmarkThumbnailModal() {
+  const overlay = document.getElementById('benchmarkThumbModal');
+  const img = document.getElementById('benchmarkThumbModalImage');
+  const captionEl = document.getElementById('benchmarkThumbModalCaption');
+  if (overlay) overlay.classList.remove('active');
+  if (img) img.removeAttribute('src');
+  if (captionEl) captionEl.textContent = '';
+}
+
 function exportAs(type) {
   hideExportModal();
   
@@ -9266,29 +9691,29 @@ ${scenes.map(s => {
     <h3>장면 ${s.index} <span class="badge ${s.transition}">${s.transition.toUpperCase()}</span></h3>
     <div class="tc">${formatTimecode(s.startTime)} → ${formatTimecode(s.endTime)} (${s.duration.toFixed(1)}s)</div>
     <div class="cam-tags">
-      ${cam.shotSize ? `<span class="cam-tag cam-tag-shot">📷 ${cam.shotSize}</span>` : ''}
-      ${cam.lensType ? `<span class="cam-tag cam-tag-lens">🔭 ${cam.lensType}</span>` : ''}
-      ${cam.movement ? `<span class="cam-tag cam-tag-movement">🎬 ${cam.movement}</span>` : ''}
-      ${cam.angle ? `<span class="cam-tag cam-tag-angle">📐 ${cam.angle}</span>` : ''}
-      ${cam.dof ? `<span class="cam-tag cam-tag-dof">🌊 ${cam.dof}</span>` : ''}
-      ${cam.lightingCondition ? `<span class="cam-tag" style="background:#fff1d8;color:#8a6400">💡 ${buildLightingSummary(cam) || `${cam.lightingType ? cam.lightingType + ' ' : ''}${cam.lightingCondition}`}</span>` : ''}
-      ${cam.composition ? `<span class="cam-tag" style="background:#d8fff1;color:#1c6b55">🖼 ${cam.composition}</span>` : ''}
+      ${cam.shotSize ? `<span class="cam-tag cam-tag-shot">📷 ${getDisplayValue('shotSize', cam.shotSize)}${cam.framing ? ` · ${getDisplayValue('framing', cam.framing)}` : ''}</span>` : ''}
+      ${cam.lensType ? `<span class="cam-tag cam-tag-lens">🔭 ${getDisplayValue('lensType', cam.lensType)}</span>` : ''}
+      ${cam.movement ? `<span class="cam-tag cam-tag-movement">🎬 ${getDisplayValue('movement', cam.movement)}</span>` : ''}
+      ${cam.angle ? `<span class="cam-tag cam-tag-angle">📐 ${getDisplayValue('angle', cam.angle)}</span>` : ''}
+      ${cam.dof ? `<span class="cam-tag cam-tag-dof">🌊 ${getDisplayValue('dof', cam.dof)}</span>` : ''}
+      ${cam.lightingCondition ? `<span class="cam-tag" style="background:#fff1d8;color:#8a6400">💡 ${buildLightingSummaryDisplay(cam) || `${getDisplayValue('lightingType', cam.lightingType)} ${getDisplayValue('lightingCondition', cam.lightingCondition)}`.trim()}</span>` : ''}
+      ${cam.composition ? `<span class="cam-tag" style="background:#d8fff1;color:#1c6b55">🖼 ${getDisplayValue('composition', cam.composition)}</span>` : ''}
     </div>
     ${(cam.shotSizeDetail || cam.lensDetail || cam.movementDetail || cam.dofDetail || cam.lightingDetail || cam.compositionDetail) ? `
     <div class="cam-detail">
-      ${cam.shotSizeDetail ? `<b>샷:</b> ${cam.shotSizeDetail}<br>` : ''}
-      ${cam.lensDetail ? `<b>렌즈:</b> ${cam.lensDetail}<br>` : ''}
-      ${cam.movementDetail ? `<b>무빙:</b> ${cam.movementDetail}<br>` : ''}
-      ${cam.dofDetail ? `<b>심도:</b> ${cam.dofDetail}<br>` : ''}
-      ${cam.lightingDetail ? `<b>조명:</b> ${cam.lightingDetail}<br>` : ''}
-      ${cam.compositionDetail ? `<b>구도:</b> ${cam.compositionDetail}` : ''}
+      ${cam.shotSizeDetail ? `<b>샷:</b> ${localizeCameraText(cam.shotSizeDetail)}<br>` : ''}
+      ${cam.lensDetail ? `<b>렌즈:</b> ${localizeCameraText(cam.lensDetail)}<br>` : ''}
+      ${cam.movementDetail ? `<b>무빙:</b> ${localizeCameraText(cam.movementDetail)}<br>` : ''}
+      ${cam.dofDetail ? `<b>심도:</b> ${localizeCameraText(cam.dofDetail)}<br>` : ''}
+      ${cam.lightingDetail ? `<b>조명:</b> ${localizeCameraText(cam.lightingDetail)}<br>` : ''}
+      ${cam.compositionDetail ? `<b>구도:</b> ${localizeCameraText(cam.compositionDetail)}` : ''}
     </div>` : ''}
     <hr class="divider">
-    <div class="desc">${s.description}</div>
+    <div class="desc">${getDisplaySceneDescription(s)}</div>
   </div>
 </div>`;
 }).join('')}
-<p style="text-align:center;color:#aaa;margin-top:40px;font-size:12px">Generated by StoryFrame</p>
+<p style="text-align:center;color:#aaa;margin-top:40px;font-size:12px">StoryFrame으로 생성</p>
 ${currentScenario ? `
 <div style="margin-top:48px;padding-top:32px;border-top:2px solid #eee">
 <h2 style="font-size:22px;margin-bottom:16px">📝 시나리오</h2>
