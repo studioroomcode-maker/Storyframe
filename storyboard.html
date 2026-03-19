@@ -2991,11 +2991,11 @@ select.setting-input {
   <div class="split-dialog">
     <h3>✂️ 장면 분할</h3>
     <div class="split-dialog-info" id="splitDialogInfo"></div>
-    <button class="split-option-btn" onclick="splitSceneAtMidpoint(_splitSceneIdx)">
+    <button class="split-option-btn" onclick="splitSceneAtMidpoint(splitState.sceneIdx)">
       <span class="split-option-icon">⚡</span>
       <div><strong>중간 지점 분할</strong><br><small style="color:var(--text-muted);">장면의 정가운데 지점으로 나눕니다</small></div>
     </button>
-    <button class="split-option-btn" onclick="splitSceneAtPlayhead(_splitSceneIdx)">
+    <button class="split-option-btn" onclick="splitSceneAtPlayhead(splitState.sceneIdx)">
       <span class="split-option-icon">🎯</span>
       <div><strong>현재 재생 위치에서 분할</strong><br><small style="color:var(--text-muted);">플레이헤드가 있는 위치에서 나눕니다</small></div>
     </button>
@@ -3124,7 +3124,7 @@ function saveLearningDB(db) {
     localStorage.setItem(LEARNING_DB_KEY, JSON.stringify(db));
   } catch {
     const trimmed = { version: 1, entries: db.entries.slice(-300) };
-    try { localStorage.setItem(LEARNING_DB_KEY, JSON.stringify(trimmed)); } catch {}
+    try { localStorage.setItem(LEARNING_DB_KEY, JSON.stringify(trimmed)); } catch (e) { console.warn('LearningDB save failed:', e); }
   }
 }
 
@@ -5445,6 +5445,44 @@ async function _scanRange(video, start, end, scanRate, prevSig) {
   return { diffs, lastSig: prev };
 }
 
+
+// _scanRangeParallel: Pass-2 병렬 처리용 — 전용 video 엘리먼트로 독립 스캔
+async function _scanRangeParallel(start, end, scanRate) {
+  const video = await createSamplingVideo();
+  if (!video) return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = 160; canvas.height = 90;
+  const ctx2 = canvas.getContext('2d', { willReadFrequently: true });
+  const diffs = [];
+  let prevSig = null;
+  try {
+    const duration = end - start;
+    const steps = Math.max(1, Math.round(duration / scanRate));
+    for (let step = 0; step <= steps; step++) {
+      const t = start + (step / steps) * duration;
+      await new Promise(res => {
+        const onSeeked = () => { video.removeEventListener('seeked', onSeeked); res(); };
+        video.addEventListener('seeked', onSeeked);
+        video.currentTime = t;
+      });
+      ctx2.drawImage(video, 0, 0, 160, 90);
+      const pixels = ctx2.getImageData(0, 0, 160, 90).data;
+      const sig = getFrameSignatureFromPixels(pixels, 160, 90);
+      if (prevSig !== null) {
+        const diff = compareSignatures(sig, prevSig);
+        diffs.push({ time: t, diff });
+      }
+      prevSig = sig;
+    }
+  } catch (e) {
+    console.debug('_scanRangeParallel failed:', e);
+  } finally {
+    if (video.parentNode) video.parentNode.removeChild(video);
+    else video.src = '';
+  }
+  return diffs;
+}
+
 async function detectScenes(sensitivity, minScene, maxFrames) {
   const video = await createSamplingVideo();
   const duration = video.duration;
@@ -5520,14 +5558,22 @@ async function detectScenes(sensitivity, minScene, maxFrames) {
     fineDiffs.push(...diffs);
   } else {
     // 耳?댁뒪 B: ?덈룄?곕퀎 ?뺣? ?ㅼ틪
-    for (let wi = 0; wi < mergedWindows.length; wi++) {
-      const win = mergedWindows[wi];
-      updateProgress(
-        `[2/2] 정밀 스캔 중... (${wi + 1}/${mergedWindows.length})`,
-        30 + (wi / Math.max(mergedWindows.length, 1)) * 17
-      );
-      const { diffs } = await _scanRange(video, win.start, win.end, FINE_RATE, null);
+    if (mergedWindows.length < 2) {
+      // Single window: sequential (fast path)
+      const { diffs } = await _scanRange(video, mergedWindows[0].start, mergedWindows[0].end, FINE_RATE, null);
       fineDiffs.push(...diffs);
+    } else {
+      // Multiple windows: parallel batches (3 concurrent) for performance
+      const CONCURRENCY = 3;
+      let done = 0;
+      for (let bi = 0; bi < mergedWindows.length; bi += CONCURRENCY) {
+        const chunk = mergedWindows.slice(bi, bi + CONCURRENCY);
+        const pct = 30 + (done / Math.max(mergedWindows.length, 1)) * 17;
+        updateProgress(`[2/2] 정밀 스캔 중... (${done + 1}-${Math.min(done + chunk.length, mergedWindows.length)}/${mergedWindows.length})`, pct);
+        const results = await Promise.all(chunk.map(w => _scanRangeParallel(w.start, w.end, FINE_RATE)));
+        results.forEach(r => { if (r) fineDiffs.push(...r); });
+        done += chunk.length;
+      }
     }
   }
 
@@ -9483,23 +9529,19 @@ function confDot(conf) {
   return `<span style="color:#ff6b6b;font-size:9px;margin-left:4px;" title="신뢰도 ${pct}%">●</span>`;
 }
 
-function renderStoryboard() {
-  const section = document.getElementById('storyboardSection');
-  section.classList.add('active');
-  
-  // Stats
+// ── renderStoryboard helpers ─────────────────────────────────────────
+function _renderStats() {
   document.getElementById('totalScenes').textContent = scenes.length;
   document.getElementById('totalDuration').textContent = currentMediaType === 'photo' ? '사진' : formatTime(videoDuration);
   const avgDur = scenes.length > 0 ? videoDuration / scenes.length : 0;
   document.getElementById('avgScene').textContent = currentMediaType === 'photo' ? '정지 컷' : avgDur.toFixed(1) + 's';
-  
-  // Timeline
-  const timelineStrip = document.querySelector('.timeline-strip');
-  const timelineBar = document.getElementById('timelineBar');
-  if (timelineStrip) timelineStrip.style.display = currentMediaType === 'photo' ? 'none' : 'block';
+}
+
+function _buildTimelineBarHTML() {
+  if (currentMediaType === 'photo') return '';
   const colors = ['#c4f04d', '#4dc4f0', '#f04d6e', '#f0a04d', '#a04df0', '#4df0a0', '#f0e04d', '#4d8af0'];
   const timelineDuration = Math.max(videoDuration, 1);
-  timelineBar.innerHTML = currentMediaType === 'photo' ? '' : scenes.map((s, i) => {
+  return currentMediaType === 'photo' ? '' : scenes.map((s, i) => {
     const widthPercent = (s.duration / timelineDuration) * 100;
     const color = colors[i % colors.length];
     const handle = i < scenes.length - 1
@@ -9513,21 +9555,9 @@ function renderStoryboard() {
              </div>`;
   }).join('');
 
-  initTimelineDrag();
-  initPlayhead();
+}
 
-  // 鍮꾨뵒??timeupdate ???뚮젅?댄뿤???먮룞 ?대룞
-  const _vp = getVideoPlayer();
-  if (_vp && !_vp._tlListenerAdded) {
-    _vp.addEventListener('timeupdate', () => {
-      if (!_tlPhDrag) updatePlayhead(_vp.currentTime);
-    });
-    _vp._tlListenerAdded = true;
-  }
-
-  // Scene cards
-  const grid = document.getElementById('scenesGrid');
-  grid.innerHTML = scenes.map((s, i) => {
+function _buildSceneCardHTML(s, i) {
     const cam = s.camera || {};
     return `
     <div class="scene-card" style="animation-delay: ${i * 0.05}s">
@@ -9631,11 +9661,9 @@ function renderStoryboard() {
         ${eduModeOn ? buildEduPanel(s) : ''}
       </div>
     </div>`;
-  }).join('');
-  
-  // Scroll to storyboard
-  section.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  
+}
+
+function _renderPostSections() {
   // Show scenario section
   document.getElementById('scenarioSection').style.display = currentMediaType === 'photo' ? 'none' : 'block';
   document.getElementById('scenarioGenBtn').style.display = currentMediaType === 'photo' ? 'none' : 'inline-flex';
@@ -9656,9 +9684,33 @@ function renderStoryboard() {
   buildColorArc();
 }
 
+function renderStoryboard() {
+  const section = document.getElementById('storyboardSection');
+  section.classList.add('active');
+  _renderStats();
+  const timelineStrip = document.querySelector('.timeline-strip');
+  const timelineBar = document.getElementById('timelineBar');
+  if (timelineStrip) timelineStrip.style.display = currentMediaType === 'photo' ? 'none' : 'block';
+  timelineBar.innerHTML = _buildTimelineBarHTML();
+  initTimelineDrag();
+  initPlayhead();
+  // timeupdate listener (단일 등록 보장)
+  const _vp = getVideoPlayer();
+  if (_vp && !_vp._tlListenerAdded) {
+    _vp.addEventListener('timeupdate', () => {
+      if (!tlState.phDrag) updatePlayhead(_vp.currentTime);
+    });
+    _vp._tlListenerAdded = true;
+  }
+  document.getElementById('scenesGrid').innerHTML = scenes.map((s, i) => _buildSceneCardHTML(s, i)).join('');
+  section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  _renderPostSections();
+}
+
 // ?? ??꾨씪???쒕옒洹?& ?뚮젅?댄뿤???????????????????????????????????????????
-let _tlDrag = null;      // 寃쎄퀎 ?쒕옒洹??곹깭
-let _tlPhDrag = null;    // ?뚮젅?댄뿤???쒕옒洹??곹깭
+// Timeline interaction state
+const tlState = { drag: null, phDrag: null, splitMode: false };
+let _tlEventAbort = null; // AbortController: timeline event listeners
 
 // ?? 寃쎄퀎 ?쒕옒洹???????????????????????????????????????????????????????????
 function initTimelineDrag() {
@@ -9668,7 +9720,7 @@ function initTimelineDrag() {
   const startBoundaryDrag = (clientX, idx) => {
     const handle = bar.querySelector(`.timeline-handle[data-index="${idx}"]`);
     if (handle) handle.classList.add('dragging');
-    _tlDrag = {
+    tlState.drag = {
       idx, handle,
       startX: clientX,
       barRect: document.getElementById('timelineBarWrap').getBoundingClientRect(),
@@ -9678,26 +9730,31 @@ function initTimelineDrag() {
     if (tooltip) tooltip.style.display = 'block';
   };
 
+  // Abort previous listeners on re-render (prevents accumulation)
+  if (_tlEventAbort) _tlEventAbort.abort();
+  _tlEventAbort = new AbortController();
+  const { signal: tlSignal } = _tlEventAbort;
+
   bar.addEventListener('mousedown', e => {
     const handle = e.target.closest('.timeline-handle');
     if (!handle) return;
     if (e.target.closest('.tl-merge-btn')) return;
     e.preventDefault(); e.stopPropagation();
     startBoundaryDrag(e.clientX, parseInt(handle.dataset.index));
-  });
+  }, { signal: tlSignal });
 
   bar.addEventListener('touchstart', e => {
     const handle = e.target.closest('.timeline-handle');
     if (!handle) return;
     e.preventDefault();
     startBoundaryDrag(e.touches[0].clientX, parseInt(handle.dataset.index));
-  }, { passive: false });
+  }, { passive: false, signal: tlSignal });
 }
 
 function _tlApplyDrag(clientX) {
-  if (!_tlDrag) return;
-  const { idx, barRect, origEnd } = _tlDrag;
-  const dx = clientX - _tlDrag.startX;
+  if (!tlState.drag) return;
+  const { idx, barRect, origEnd } = tlState.drag;
+  const dx = clientX - tlState.drag.startX;
   const dt = (dx / barRect.width) * videoDuration;
   const MIN_LEN = 0.3;
   const newBoundary = Math.max(
@@ -9743,22 +9800,24 @@ function initPlayhead() {
   if (!ph || !wrap) return;
 
   const startPhDrag = (clientX) => {
-    _tlPhDrag = { wrapRect: wrap.getBoundingClientRect() };
+    tlState.phDrag = { wrapRect: wrap.getBoundingClientRect() };
     ph.style.pointerEvents = 'auto';
   };
 
+  // Reuse AbortController set by initTimelineDrag (always called in tandem)
+  const phSignal = _tlEventAbort?.signal;
   ph.addEventListener('mousedown', e => {
     e.preventDefault(); e.stopPropagation();
     startPhDrag(e.clientX);
-  });
+  }, { signal: phSignal });
   ph.addEventListener('touchstart', e => {
     e.stopPropagation();
     startPhDrag(e.touches[0].clientX);
-  }, { passive: true });
+  }, { passive: true, signal: phSignal });
 
   // 鍮?怨듦컙 ?대┃?쇰줈???대룞 (遺꾪븷 紐⑤뱶?먯꽌??鍮꾪솢??
   wrap.addEventListener('mousedown', e => {
-    if (_tlSplitMode) return;
+    if (tlState.splitMode) return;
     if (e.target.closest('.timeline-handle') || e.target.closest('#tlPlayhead')) return;
     if (!videoDuration) return;
     const rect = wrap.getBoundingClientRect();
@@ -9766,13 +9825,13 @@ function initPlayhead() {
     const t = pct * videoDuration;
     seekTo(t);
     updatePlayhead(t);
-    _tlPhDrag = { wrapRect: rect };
+    tlState.phDrag = { wrapRect: rect };
   });
 }
 
 function _phApplyDrag(clientX) {
-  if (!_tlPhDrag || !videoDuration) return;
-  const { wrapRect } = _tlPhDrag;
+  if (!tlState.phDrag || !videoDuration) return;
+  const { wrapRect } = tlState.phDrag;
   const pct = Math.max(0, Math.min(1, (clientX - wrapRect.left) / wrapRect.width));
   const t = pct * videoDuration;
   updatePlayhead(t);
@@ -9782,38 +9841,38 @@ function _phApplyDrag(clientX) {
 
 // ?? 怨듯넻 ?대깽????????????????????????????????????????????????????????????
 document.addEventListener('mousemove', e => {
-  if (_tlDrag) _tlApplyDrag(e.clientX);
-  if (_tlPhDrag) _phApplyDrag(e.clientX);
+  if (tlState.drag) _tlApplyDrag(e.clientX);
+  if (tlState.phDrag) _phApplyDrag(e.clientX);
 });
 document.addEventListener('touchmove', e => {
-  if (_tlDrag) _tlApplyDrag(e.touches[0].clientX);
-  if (_tlPhDrag) _phApplyDrag(e.touches[0].clientX);
+  if (tlState.drag) _tlApplyDrag(e.touches[0].clientX);
+  if (tlState.phDrag) _phApplyDrag(e.touches[0].clientX);
 }, { passive: true });
 
 document.addEventListener('mouseup', () => {
-  if (_tlDrag) {
-    if (_tlDrag.handle) _tlDrag.handle.classList.remove('dragging');
+  if (tlState.drag) {
+    if (tlState.drag.handle) tlState.drag.handle.classList.remove('dragging');
     const tooltip = document.getElementById('tlDragTooltip');
     if (tooltip) tooltip.style.display = 'none';
-    _tlDrag = null;
+    tlState.drag = null;
     renderStoryboard();
   }
-  _tlPhDrag = null;
+  tlState.phDrag = null;
 });
 document.addEventListener('touchend', () => {
-  if (_tlDrag) {
-    if (_tlDrag.handle) _tlDrag.handle.classList.remove('dragging');
+  if (tlState.drag) {
+    if (tlState.drag.handle) tlState.drag.handle.classList.remove('dragging');
     const tooltip = document.getElementById('tlDragTooltip');
     if (tooltip) tooltip.style.display = 'none';
-    _tlDrag = null;
+    tlState.drag = null;
     renderStoryboard();
   }
-  _tlPhDrag = null;
+  tlState.phDrag = null;
 });
 
 function timelineSegmentClick(e, sceneIndex) {
   if (e.target.closest('.timeline-handle') || e.target.closest('#tlPlayhead') || e.target.closest('.tl-merge-btn')) return;
-  if (_tlSplitMode) {
+  if (tlState.splitMode) {
     const wrap = document.getElementById('timelineBarWrap');
     const rect = wrap.getBoundingClientRect();
     const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
@@ -10211,8 +10270,8 @@ function resetApp() {
 
 // ?? ?λ㈃ ?몄쭛: ?⑹튂湲?/ ?섎늻湲????????????????????????????????????????????
 
-let _splitSceneIdx = -1;
-let _tlSplitMode = false;
+// Split dialog state
+const splitState = { sceneIdx: -1 };
 
 function _reindexScenes() {
   scenes.forEach((s, i) => { s.index = i + 1; });
@@ -10233,10 +10292,10 @@ async function captureFrameAtTime(time) {
         c.height = Math.max(1, Math.round(320 * vp.videoHeight / vp.videoWidth));
         c.getContext('2d').drawImage(vp, 0, 0, c.width, c.height);
         resolve(c.toDataURL('image/jpeg', 0.82));
-      } catch (_) { resolve(null); }
+      } catch (e) { console.debug('captureFrameAtTime failed:', e); resolve(null); }
       // ?먮옒 ?꾩튂濡?蹂듭썝
       vp.currentTime = prevTime;
-      if (!wasPaused) vp.play().catch(() => {});
+      if (!wasPaused) vp.play().catch(e => console.debug('autoplay blocked:', e));
     };
     vp.addEventListener('seeked', onSeeked, { once: true });
     vp.currentTime = Math.max(0, Math.min(time, (vp.duration || time) - 0.01));
@@ -10315,16 +10374,16 @@ function splitSceneAtPlayhead(i) {
 }
 
 function splitSceneCustom() {
-  if (_splitSceneIdx < 0) return;
+  if (splitState.sceneIdx < 0) return;
   const val = document.getElementById('splitTimeInput').value.trim();
   const parsed = parseTimecodeInput(val);
   if (parsed === null) { showToast('시간코드 형식이 올바르지 않습니다. 예: 00:01:23.456'); return; }
-  splitSceneAtTime(_splitSceneIdx, parsed);
+  splitSceneAtTime(splitState.sceneIdx, parsed);
 }
 
 // 분할 다이얼로그 열기/닫기
 function showSplitDialog(i) {
-  _splitSceneIdx = i;
+  splitState.sceneIdx = i;
   const s = scenes[i];
   document.getElementById('splitDialogInfo').textContent =
     `S${s.index}  ${formatTimecode(s.startTime)} → ${formatTimecode(s.endTime)}  (${s.duration.toFixed(2)}s)`;
@@ -10335,7 +10394,7 @@ function showSplitDialog(i) {
 
 function closeSplitDialog() {
   document.getElementById('splitSceneModal').classList.remove('active');
-  _splitSceneIdx = -1;
+  splitState.sceneIdx = -1;
 }
 
 // 타임라인 핸들 옆의 합치기 버튼 클릭
@@ -10347,12 +10406,12 @@ function handleMergeBtnClick(e, idx) {
 
 // 타임라인 분할 모드 토글
 function toggleTimelineSplitMode() {
-  _tlSplitMode = !_tlSplitMode;
+  tlState.splitMode = !tlState.splitMode;
   const btn = document.getElementById('tlSplitModeBtn');
   const bar = document.getElementById('timelineBar');
-  if (btn) btn.classList.toggle('active', _tlSplitMode);
-  if (bar) bar.classList.toggle('split-mode', _tlSplitMode);
-  showToast(_tlSplitMode
+  if (btn) btn.classList.toggle('active', tlState.splitMode);
+  if (bar) bar.classList.toggle('split-mode', tlState.splitMode);
+  showToast(tlState.splitMode
     ? '타임라인 분할 모드가 켜졌습니다. 원하는 지점을 클릭하면 분할됩니다.'
     : '타임라인 분할 모드를 종료했습니다.');
 }
@@ -10930,8 +10989,7 @@ function generateAssignmentReportHTML() {
 // ================================================================
 //  레퍼런스 비교 분석 (Reference Comparison)
 // ================================================================
-let refScenes = [];
-let refVideoUrl = null;
+const refState = { scenes: [], videoUrl: null }; // Reference video state
 
 function triggerRefVideoUpload() {
   if (!scenes.length) { showToast('먼저 스토리보드를 생성해주세요.'); return; }
@@ -10949,7 +11007,7 @@ document.getElementById('refVideoInput').addEventListener('change', async functi
       const text = await file.text();
       const data = JSON.parse(text);
       if (!Array.isArray(data.scenes)) throw new Error('올바른 StoryFrame JSON 파일이 아닙니다.');
-      refScenes = data.scenes.map((s, i) => ({ ...s, index: i + 1 }));
+      refState.scenes = data.scenes.map((s, i) => ({ ...s, index: i + 1 }));
       renderRefComparison(file.name);
       showToast('레퍼런스 JSON 불러오기 완료');
     } catch(err) {
@@ -10970,15 +11028,15 @@ async function analyzeRefVideo(file) {
   body.innerHTML = '';
   section.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
-  if (refVideoUrl) URL.revokeObjectURL(refVideoUrl);
-  refVideoUrl = URL.createObjectURL(file);
+  if (refState.videoUrl) URL.revokeObjectURL(refState.videoUrl);
+  refState.videoUrl = URL.createObjectURL(file);
 
   // Save globals
   const savedVideoUrl = videoUrl;
   const savedDuration = videoDuration;
 
   try {
-    videoUrl = refVideoUrl;
+    videoUrl = refState.videoUrl;
     // Get duration
     await new Promise((resolve, reject) => {
       const v = document.createElement('video');
@@ -10986,7 +11044,7 @@ async function analyzeRefVideo(file) {
       v.preload = 'metadata';
       v.onloadedmetadata = () => { videoDuration = v.duration; v.src = ''; resolve(); };
       v.onerror = reject;
-      v.src = refVideoUrl;
+      v.src = refState.videoUrl;
     });
 
     const sensitivity = parseInt(document.getElementById('sensitivity').value) || 40;
@@ -10996,7 +11054,7 @@ async function analyzeRefVideo(file) {
     document.getElementById('refcompSub').textContent = `"${file.name}" 분석 중...`;
     const sceneChanges = await detectScenes(sensitivity, minScene, maxFrames);
     const samplingVideo = await createSamplingVideo();
-    refScenes = [];
+    refState.scenes = [];
 
     try {
       for (let i = 0; i < sceneChanges.length; i++) {
@@ -11013,14 +11071,14 @@ async function analyzeRefVideo(file) {
         };
         s.camera = await analyzeFrameAdvanced(s);
         s.description = generateLocalDescription(s);
-        refScenes.push(s);
+        refState.scenes.push(s);
       }
     } finally {
       cleanupSamplingVideo(samplingVideo);
     }
 
     renderRefComparison(file.name);
-    showToast(`레퍼런스 분석 완료 (${refScenes.length}개 씬)`);
+    showToast(`레퍼런스 분석 완료 (${refState.scenes.length}개 씬)`);
   } catch(err) {
     loading.style.display = 'none';
     document.getElementById('refcompBody').innerHTML = `<div style="padding:24px 28px;color:var(--danger);">분석 실패: ${err.message}</div>`;
@@ -11044,7 +11102,7 @@ function renderRefComparison(refName) {
   section.style.display = 'block';
   loading.style.display = 'none';
 
-  document.getElementById('refcompSub').textContent = `내 영상 (${scenes.length}씬) vs ${refName} (${refScenes.length}씬)`;
+  document.getElementById('refcompSub').textContent = `내 영상 (${scenes.length}씬) vs ${refName} (${refState.scenes.length}씬)`;
 
   const ko = (kind, val) => getDisplayValue(kind, val) || val || '-';
   const mkBars = (freqArr, total, color) => freqArr.slice(0,6).map(([k,v]) => {
@@ -11076,9 +11134,9 @@ function renderRefComparison(refName) {
   // Diff analysis
   const diffRows = categories.map(cat => {
     const myTop  = refFreq(scenes,    cat.key)[0];
-    const rfTop  = refFreq(refScenes, cat.key)[0];
+    const rfTop  = refFreq(refState.scenes, cat.key)[0];
     const myPct  = myTop  ? Math.round(myTop[1] /scenes.length*100)    : 0;
-    const rfPct  = rfTop  ? Math.round(rfTop[1] /refScenes.length*100) : 0;
+    const rfPct  = rfTop  ? Math.round(rfTop[1] /refState.scenes.length*100) : 0;
     const diff   = rfPct - myPct;
     const badge  = Math.abs(diff) <= 10 ? `<span class="diff-badge diff-same">유사</span>`
                  : diff > 0              ? `<span class="diff-badge diff-more">레퍼런스 +${diff}%</span>`
@@ -11092,7 +11150,7 @@ function renderRefComparison(refName) {
   }).join('');
 
   // Scene frame pairs
-  const pairCount = Math.min(scenes.length, refScenes.length, 6);
+  const pairCount = Math.min(scenes.length, refState.scenes.length, 6);
   const framePairs = Array.from({length:pairCount}, (_,i) => `
     <div class="refcomp-frame-pair">
       <div>
@@ -11100,8 +11158,8 @@ function renderRefComparison(refName) {
         <div class="refcomp-frame-label">내 영상 S${i+1} · ${scenes[i].camera?.shotSize||'-'}</div>
       </div>
       <div>
-        <img src="${refScenes[i].image}" class="refcomp-frame-img">
-        <div class="refcomp-frame-label">레퍼런스 S${i+1} · ${refScenes[i].camera?.shotSize||'-'}</div>
+        <img src="${refState.scenes[i].image}" class="refcomp-frame-img">
+        <div class="refcomp-frame-label">레퍼런스 S${i+1} · ${refState.scenes[i].camera?.shotSize||'-'}</div>
       </div>
     </div>`).join('');
 
@@ -11112,8 +11170,8 @@ function renderRefComparison(refName) {
         ${colHTML(scenes, 'mine', '내 영상')}
       </div>
       <div>
-        <div class="refcomp-col-title ref">🎬 레퍼런스 (${refScenes.length}씬)</div>
-        ${colHTML(refScenes, 'ref', '레퍼런스')}
+        <div class="refcomp-col-title ref">🎬 레퍼런스 (${refState.scenes.length}씬)</div>
+        ${colHTML(refState.scenes, 'ref', '레퍼런스')}
       </div>
     </div>
     <div style="margin-bottom:24px;">
@@ -11131,15 +11189,14 @@ function renderRefComparison(refName) {
 
 function closeRefComp() {
   document.getElementById('refcompSection').style.display = 'none';
-  refScenes = [];
-  if (refVideoUrl) { URL.revokeObjectURL(refVideoUrl); refVideoUrl = null; }
+  refState.scenes = [];
+  if (refState.videoUrl) { URL.revokeObjectURL(refState.videoUrl); refState.videoUrl = null; }
 }
 
 // ================================================================
 //  씬 계획 모드 (Pre-production Planner)
 // ================================================================
-let plannerScenes = [];
-let plannerIdSeq = 0;
+const plannerState = { scenes: [], idSeq: 0 }; // Planner state
 
 function showPlannerMode() {
   document.getElementById('plannerOverlay').classList.add('active');
@@ -11151,9 +11208,9 @@ function hidePlannerMode() {
 }
 
 function addPlannerScene() {
-  plannerScenes.push({
-    id: ++plannerIdSeq,
-    sceneNum: plannerScenes.length + 1,
+  plannerState.scenes.push({
+    id: ++plannerState.idSeq,
+    sceneNum: plannerState.scenes.length + 1,
     location: '', timeOfDay: 'Day',
     shotSize: 'MS', angle: 'Eye-level', movement: 'Static',
     lensType: 'Normal(35-60mm)', dof: 'Moderate', lighting: 'Natural',
@@ -11166,20 +11223,20 @@ function addPlannerScene() {
 }
 
 function deletePlannerScene(id) {
-  plannerScenes = plannerScenes.filter(s => s.id !== id);
-  plannerScenes.forEach((s, i) => s.sceneNum = i + 1);
+  plannerState.scenes = plannerState.scenes.filter(s => s.id !== id);
+  plannerState.scenes.forEach((s, i) => s.sceneNum = i + 1);
   renderPlannerList();
 }
 
 function updatePlannerScene(id, field, value) {
-  const s = plannerScenes.find(s => s.id === id);
+  const s = plannerState.scenes.find(s => s.id === id);
   if (s) s[field] = value;
 }
 
 function renderPlannerList() {
   const empty = document.getElementById('plannerEmpty');
   const list  = document.getElementById('plannerList');
-  empty.style.display = plannerScenes.length ? 'none' : 'block';
+  empty.style.display = plannerState.scenes.length ? 'none' : 'block';
 
   const shotOpts  = BENCHMARK_OPTIONS.shotSizes.filter(Boolean).map(v => `<option value="${v}">${getDisplayValue('shotSize',v)||v}</option>`).join('');
   const movOpts   = BENCHMARK_OPTIONS.movements.filter(Boolean).map(v => `<option value="${v}">${getDisplayValue('movement',v)||v}</option>`).join('');
@@ -11189,7 +11246,7 @@ function renderPlannerList() {
   const timeOpts  = ['Day','Golden Hour','Blue Hour','Night','Interior','Overcast'].map(v => `<option value="${v}">${v}</option>`).join('');
   const lightOpts = ['Natural','Artificial','Mixed','High-key','Low-key','Silhouette','Rembrandt'].map(v => `<option value="${v}">${getDisplayValue('lightingCondition',v)||getDisplayValue('lightingType',v)||v}</option>`).join('');
 
-  list.innerHTML = plannerScenes.map(s => `
+  list.innerHTML = plannerState.scenes.map(s => `
     <div class="planner-card" id="planner-card-${s.id}">
       <div class="planner-card-num">${s.sceneNum}</div>
       <div>
@@ -11247,9 +11304,9 @@ function renderPlannerList() {
 }
 
 function exportPlannerCSV() {
-  if (!plannerScenes.length) { showToast('씬을 먼저 추가해주세요.'); return; }
+  if (!plannerState.scenes.length) { showToast('씬을 먼저 추가해주세요.'); return; }
   const headers = ['씬#','장소','시간대','샷사이즈','앵글','무빙','렌즈','DOF','조명','씬설명','소품','메모'];
-  const rows = plannerScenes.map(s => [
+  const rows = plannerState.scenes.map(s => [
     s.sceneNum, s.location, s.timeOfDay,
     `${s.shotSize}(${getDisplayValue('shotSize',s.shotSize)||s.shotSize})`,
     getDisplayValue('angle',s.angle)||s.angle,
@@ -11265,11 +11322,11 @@ function exportPlannerCSV() {
 }
 
 function exportPlannerReport() {
-  if (!plannerScenes.length) { showToast('씬을 먼저 추가해주세요.'); return; }
+  if (!plannerState.scenes.length) { showToast('씬을 먼저 추가해주세요.'); return; }
   const dateStr = new Date().toLocaleDateString('ko-KR', { year:'numeric', month:'long', day:'numeric' });
   const tag = (ko, en) => `<span style="display:inline-block;padding:2px 9px;border-radius:4px;font-size:11px;font-weight:700;background:#f0ffd0;color:#4a6600;margin:2px;">${ko}</span>`;
 
-  const scenesHTML = plannerScenes.map(s => `
+  const scenesHTML = plannerState.scenes.map(s => `
     <div style="background:#fff;border:1px solid #ddd;border-radius:10px;padding:20px 24px;margin-bottom:16px;page-break-inside:avoid;">
       <div style="display:flex;align-items:center;gap:14px;margin-bottom:12px;">
         <div style="font-family:monospace;font-size:22px;font-weight:900;color:#1a1a20;background:#f5f5f0;padding:6px 14px;border-radius:8px;">S${s.sceneNum}</div>
@@ -11299,7 +11356,7 @@ function exportPlannerReport() {
   <div style="font-size:12px;letter-spacing:2px;color:#c4f04d;margin-bottom:16px;text-transform:uppercase;font-family:monospace;">📋 STORYFRAME · 촬영 계획서</div>
   <div class="ct">촬영 계획서</div>
   <div class="cs">Pre-Production Shot Plan</div>
-  <div class="cm">작성일: ${dateStr}<br>총 씬 수: ${plannerScenes.length}개</div>
+  <div class="cm">작성일: ${dateStr}<br>총 씬 수: ${plannerState.scenes.length}개</div>
 </div>
 <h2 style="font-size:20px;font-weight:900;margin-bottom:16px;">씬별 계획</h2>
 ${scenesHTML}
@@ -11312,19 +11369,19 @@ ${scenesHTML}
 // ================================================================
 //  구도 가이드 오버레이 (Composition Guide)
 // ================================================================
-let _activeGuides = { thirds: true, golden: false, center: false, diagonal: false, spiral: false };
-let _guideSceneIdx = -1;
+// Composition guide state
+const guideState = { active: { thirds: true, golden: false, center: false, diagonal: false, spiral: false }, sceneIdx: -1 };
 
 function showCompositionGuide(sceneIndex) {
   if (!scenes[sceneIndex]) return;
-  _guideSceneIdx = sceneIndex;
+  guideState.sceneIdx = sceneIndex;
   const s = scenes[sceneIndex];
   document.getElementById('compguideTitle').textContent = `📐 구도 가이드 — 장면 S${s.index}`;
   document.getElementById('compguideOverlay').classList.add('active');
   // Sync button states
-  Object.keys(_activeGuides).forEach(k => {
+  Object.keys(guideState.active).forEach(k => {
     const btn = document.getElementById('guide-' + k);
-    if (btn) btn.classList.toggle('active', _activeGuides[k]);
+    if (btn) btn.classList.toggle('active', guideState.active[k]);
   });
   drawCompositionGuide();
 }
@@ -11334,14 +11391,14 @@ function hideCompositionGuide() {
 }
 
 function toggleGuide(name) {
-  _activeGuides[name] = !_activeGuides[name];
+  guideState.active[name] = !guideState.active[name];
   const btn = document.getElementById('guide-' + name);
-  if (btn) btn.classList.toggle('active', _activeGuides[name]);
+  if (btn) btn.classList.toggle('active', guideState.active[name]);
   drawCompositionGuide();
 }
 
 function drawCompositionGuide() {
-  const s = scenes[_guideSceneIdx];
+  const s = scenes[guideState.sceneIdx];
   if (!s) return;
   const canvas = document.getElementById('compguideCanvas');
   const ctx2d  = canvas.getContext('2d');
@@ -11366,7 +11423,7 @@ function drawCompositionGuide() {
       ctx2d.restore();
     };
 
-    if (_activeGuides.thirds) {
+    if (guideState.active.thirds) {
       const colors = 'rgba(196,240,77,0.9)';
       line(W/3,0, W/3,H, colors);
       line(2*W/3,0, 2*W/3,H, colors);
@@ -11379,7 +11436,7 @@ function drawCompositionGuide() {
       });
     }
 
-    if (_activeGuides.golden) {
+    if (guideState.active.golden) {
       const phi = 1.618;
       const gx = W / (1 + phi);
       const gy = H / (1 + phi);
@@ -11389,17 +11446,17 @@ function drawCompositionGuide() {
       line(0,H-gy, W,H-gy, 'rgba(77,196,240,0.9)');
     }
 
-    if (_activeGuides.center) {
+    if (guideState.active.center) {
       line(W/2,0, W/2,H, 'rgba(240,160,77,0.8)', [6,4]);
       line(0,H/2, W,H/2, 'rgba(240,160,77,0.8)', [6,4]);
     }
 
-    if (_activeGuides.diagonal) {
+    if (guideState.active.diagonal) {
       line(0,0, W,H, 'rgba(240,77,110,0.7)');
       line(W,0, 0,H, 'rgba(240,77,110,0.7)');
     }
 
-    if (_activeGuides.spiral) {
+    if (guideState.active.spiral) {
       ctx2d.save();
       ctx2d.strokeStyle = 'rgba(200,140,255,0.85)';
       ctx2d.lineWidth = 2;
@@ -11430,16 +11487,13 @@ function drawCompositionGuide() {
 // ================================================================
 //  촬영 기법 퀴즈 (Quiz Mode)
 // ================================================================
-let _quizQuestions = [];
-let _quizIdx = 0;
-let _quizScore = 0;
-let _quizAnswered = false;
+const quizState = { questions: [], idx: 0, score: 0, answered: false }; // Quiz state
 
 function startQuiz() {
   if (scenes.length < 3) { showToast('퀴즈를 시작하려면 씬이 최소 3개 필요합니다.'); return; }
-  _quizQuestions = buildQuizQuestions();
-  if (!_quizQuestions.length) { showToast('퀴즈 문제를 만들 수 없습니다.'); return; }
-  _quizIdx = 0; _quizScore = 0; _quizAnswered = false;
+  quizState.questions = buildQuizQuestions();
+  if (!quizState.questions.length) { showToast('퀴즈 문제를 만들 수 없습니다.'); return; }
+  quizState.idx = 0; quizState.score = 0; quizState.answered = false;
   document.getElementById('quizOverlay').classList.add('active');
   showQuizQuestion();
 }
@@ -11475,11 +11529,11 @@ function buildQuizQuestions() {
 }
 
 function showQuizQuestion() {
-  const total = _quizQuestions.length;
-  const pct   = (_quizIdx / total) * 100;
+  const total = quizState.questions.length;
+  const pct   = (quizState.idx / total) * 100;
   document.getElementById('quizProgressFill').style.width = pct + '%';
-  const q = _quizQuestions[_quizIdx];
-  _quizAnswered = false;
+  const q = quizState.questions[quizState.idx];
+  quizState.answered = false;
 
   document.getElementById('quizContent').innerHTML = `
     <div class="quiz-body">
@@ -11492,17 +11546,17 @@ function showQuizQuestion() {
       </div>
     </div>
     <div class="quiz-footer">
-      <span class="quiz-score-text">문제 ${_quizIdx+1} / ${total} · 점수 ${_quizScore}/${_quizIdx}</span>
+      <span class="quiz-score-text">문제 ${quizState.idx+1} / ${total} · 점수 ${quizState.score}/${quizState.idx}</span>
       <button class="btn" id="quizNextBtn" onclick="nextQuizQuestion()" style="display:none;">다음 →</button>
     </div>`;
 }
 
 function answerQuiz(value, btnIdx) {
-  if (_quizAnswered) return;
-  _quizAnswered = true;
-  const q = _quizQuestions[_quizIdx];
+  if (quizState.answered) return;
+  quizState.answered = true;
+  const q = quizState.questions[quizState.idx];
   const isCorrect = value === q.correct;
-  if (isCorrect) _quizScore++;
+  if (isCorrect) quizState.score++;
 
   // Color all buttons
   q.answers.forEach((a, i) => {
@@ -11518,8 +11572,8 @@ function answerQuiz(value, btnIdx) {
 }
 
 function nextQuizQuestion() {
-  _quizIdx++;
-  if (_quizIdx >= _quizQuestions.length) {
+  quizState.idx++;
+  if (quizState.idx >= quizState.questions.length) {
     showQuizResult();
   } else {
     showQuizQuestion();
@@ -11527,14 +11581,14 @@ function nextQuizQuestion() {
 }
 
 function showQuizResult() {
-  const total = _quizQuestions.length;
-  const pct   = Math.round(_quizScore / total * 100);
+  const total = quizState.questions.length;
+  const pct   = Math.round(quizState.score / total * 100);
   document.getElementById('quizProgressFill').style.width = '100%';
   const msg = pct >= 80 ? '🏆 훌륭해요!' : pct >= 60 ? '👍 잘 했어요!' : pct >= 40 ? '📚 더 공부해봐요!' : '💪 다시 도전해보세요!';
   document.getElementById('quizContent').innerHTML = `
     <div class="quiz-result">
       <div class="quiz-result-score">${pct}%</div>
-      <div class="quiz-result-label">${_quizScore}문제 정답 / 전체 ${total}문제</div>
+      <div class="quiz-result-label">${quizState.score}문제 정답 / 전체 ${total}문제</div>
       <div class="quiz-result-msg">${msg}</div>
       <div style="display:flex;gap:10px;justify-content:center;margin-top:24px;">
         <button class="btn btn-primary" onclick="startQuiz()">다시 풀기</button>
@@ -11731,9 +11785,7 @@ function exportScheduleCSV() {
 
 const FP_CAM_COLORS = { A:'#c4f04d', B:'#4dc4f0', C:'#f0a04d' };
 const FP_CAM_LABELS = { A:'A CAM', B:'B CAM', C:'C CAM' };
-let _fpCameras   = {};   // { A:{x,y,angle,lens,movement}, B:{...}, C:{...} }
-let _fpActiveCam = 'A';
-let _fpSceneIdx  = 0;
+const fpState = { cameras: {}, activeCam: 'A', sceneIdx: 0 }; // Floor plan state
 const FP_FOV_BY_LENS = { Wide:75, Normal:47, Telephoto:18, Anamorphic:42, Fisheye:120, Macro:12, Standard:50 };
 const FP_MOVE_ARROWS = {
   'Push-in':'→', 'Pull-out':'←', Tracking:'→', Trucking:'→',
@@ -11745,7 +11797,7 @@ function showFloorPlan() {
   // populate scene select
   const sel = document.getElementById('fpSceneSelect');
   sel.innerHTML = scenes.map((s,i)=>`<option value="${i}">S${s.index} · ${s.camera?.shotSize||'?'} · ${s.camera?.movement||'?'}</option>`).join('');
-  _fpSceneIdx = 0;
+  fpState.sceneIdx = 0;
   setTimeout(() => drawFloorPlan(), 40);
 }
 
@@ -11754,7 +11806,7 @@ function hideFloorPlan() {
 }
 
 function selectFPCamera(cam) {
-  _fpActiveCam = cam;
+  fpState.activeCam = cam;
   ['A','B','C'].forEach(c => {
     const btn = document.getElementById('fpBtn'+c);
     if (btn) btn.classList.toggle('active', c === cam);
@@ -11762,7 +11814,7 @@ function selectFPCamera(cam) {
 }
 
 function updateFPSceneRef(val) {
-  _fpSceneIdx = parseInt(val) || 0;
+  fpState.sceneIdx = parseInt(val) || 0;
   drawFloorPlan();
 }
 
@@ -11775,10 +11827,10 @@ function handleFPClick(e) {
   const my = (e.clientY - rect.top)  * scaleY;
 
   // Check if clicking on existing camera (within 20px radius) → delete
-  for (const [cam, pos] of Object.entries(_fpCameras)) {
+  for (const [cam, pos] of Object.entries(fpState.cameras)) {
     const dx = pos.x - mx, dy = pos.y - my;
     if (Math.sqrt(dx*dx + dy*dy) < 22) {
-      delete _fpCameras[cam];
+      delete fpState.cameras[cam];
       drawFloorPlan();
       updateFPCamList();
       return;
@@ -11786,7 +11838,7 @@ function handleFPClick(e) {
   }
 
   // Place or move active camera
-  const s   = scenes[_fpSceneIdx];
+  const s   = scenes[fpState.sceneIdx];
   const cam = s?.camera || {};
   const lensType = cam.lensType || 'Normal';
   const fov = FP_FOV_BY_LENS[lensType] || 47;
@@ -11796,7 +11848,7 @@ function handleFPClick(e) {
   const subjectX = canvas2.width / 2, subjectY = canvas2.height * 0.42;
   const angle = Math.atan2(subjectY - my, subjectX - mx);
 
-  _fpCameras[_fpActiveCam] = {
+  fpState.cameras[fpState.activeCam] = {
     x: mx, y: my, angle,
     lens: lensType, fov,
     movement: cam.movement || 'Static',
@@ -11808,13 +11860,13 @@ function handleFPClick(e) {
 }
 
 function clearFPCameras() {
-  _fpCameras = {};
+  fpState.cameras = {};
   drawFloorPlan();
   updateFPCamList();
 }
 
 function suggestFPCameras() {
-  const s   = scenes[_fpSceneIdx];
+  const s   = scenes[fpState.sceneIdx];
   const cam = s?.camera || {};
   const W = 776, H = 400;
   const cx = W/2, cy = H*0.42;
@@ -11839,7 +11891,7 @@ function suggestFPCameras() {
   const lensType = cam.lensType || 'Normal';
   const fov = FP_FOV_BY_LENS[lensType] || 47;
 
-  _fpCameras = {
+  fpState.cameras = {
     A: { x:aX, y:aY, angle:aAngle, lens:lensType, fov, movement:cam.movement||'Static', shotSize:cam.shotSize||'' },
     B: { x:bX, y:bY, angle:bAngle, lens:'Normal', fov:47, movement:'Static', shotSize:'' },
     C: { x:cX, y:cY, angle:cAngle, lens:dof.includes('shallow')?lensType:'Normal', fov:dof.includes('shallow')?fov:47, movement:'Static', shotSize:dof.includes('shallow')?cam.shotSize:'' }
@@ -11881,7 +11933,7 @@ function drawFloorPlan() {
   ctx.fillText('SUBJECT', subX, subY + 30);
 
   // 180-degree axis (if any camera placed)
-  const camList = Object.entries(_fpCameras);
+  const camList = Object.entries(fpState.cameras);
   if (camList.length >= 1) {
     const firstCam = camList[0][1];
     const axisAngle = firstCam.angle + Math.PI/2;
@@ -11895,7 +11947,7 @@ function drawFloorPlan() {
   }
 
   // Draw FOV cones + camera icons
-  for (const [camId, pos] of Object.entries(_fpCameras)) {
+  for (const [camId, pos] of Object.entries(fpState.cameras)) {
     const col = FP_CAM_COLORS[camId];
     const halfFov = (pos.fov / 2) * Math.PI / 180;
     const fovDist = 180;
@@ -11951,7 +12003,7 @@ function drawFloorPlan() {
 function updateFPCamList() {
   const el = document.getElementById('floorplanCamList');
   if (!el) return;
-  const items = Object.entries(_fpCameras).map(([id, pos]) => {
+  const items = Object.entries(fpState.cameras).map(([id, pos]) => {
     const col = FP_CAM_COLORS[id];
     return `<div class="floorplan-camitem" style="border-color:${col}44;">
       <div class="floorplan-camitem-dot" style="background:${col}"></div>
