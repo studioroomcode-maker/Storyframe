@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>StoryFrame 영화 스토리보드 생성기</title>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;600;700;900&family=JetBrains+Mono:wght@400;500;600&family=Playfair+Display:wght@700;900&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
 :root {
   --bg-primary: #0a0a0c;
@@ -2581,6 +2582,50 @@ select.setting-input {
 .floorplan-hint {
   font-size: 11px; color: var(--text-muted); padding: 0 22px 14px;
 }
+/* ── Cloud / Auth ─────────────────────────────────────────────────────────── */
+.cloud-auth-btn {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 12px; border-radius: var(--radius); border: 1px solid var(--border);
+  background: transparent; color: var(--text-primary); cursor: pointer;
+  font-size: 13px; transition: all 0.15s;
+}
+.cloud-auth-btn:hover { background: var(--bg-hover); border-color: var(--accent); }
+.cloud-auth-btn .dot {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--accent);
+  flex-shrink: 0; display: none;
+}
+.cloud-auth-btn.signed-in .dot { display: block; }
+.auth-form-group { margin-bottom: 12px; }
+.auth-form-group input {
+  width: 100%; box-sizing: border-box;
+  padding: 9px 12px; border: 1px solid var(--border);
+  border-radius: var(--radius); background: var(--bg-secondary);
+  color: var(--text-primary); font-size: 14px;
+}
+.auth-form-group input:focus { outline: none; border-color: var(--accent); }
+.auth-err { color: var(--danger, #ff4d4f); font-size: 13px; min-height: 18px; margin: 6px 0; }
+.auth-link { color: var(--accent); cursor: pointer; text-decoration: none; }
+.auth-link:hover { text-decoration: underline; }
+.cloud-project-item {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 12px; border: 1px solid var(--border);
+  border-radius: var(--radius); margin-bottom: 8px;
+  transition: background 0.1s;
+}
+.cloud-project-item:hover { background: var(--bg-hover); }
+.cloud-project-thumb img { border-radius: 4px; display: block; }
+.cloud-project-name { font-weight: 600; font-size: 14px; }
+.cloud-project-meta { color: var(--text-muted); font-size: 12px; margin-top: 3px; }
+.cloud-project-actions { margin-left: auto; display: flex; gap: 6px; flex-shrink: 0; }
+.btn-xs {
+  padding: 4px 10px; font-size: 12px; border-radius: 4px;
+  cursor: pointer; border: 1px solid var(--border);
+  background: var(--bg-secondary); color: var(--text-primary);
+}
+.btn-xs:hover { background: var(--bg-hover); }
+.btn-xs.btn-danger { background: var(--danger, #ff4d4f); color: #fff; border-color: transparent; }
+.btn-xs.btn-danger:hover { opacity: 0.85; }
+.cloud-empty { color: var(--text-muted); padding: 32px; text-align: center; font-size: 14px; }
 </style>
 </head>
 <body>
@@ -2601,6 +2646,10 @@ select.setting-input {
     <button class="btn" id="floorplanBtn" onclick="showFloorPlan()" style="display:none;" title="멀티 카메라 플로어 플랜">📐 카메라 배치</button>
     <button class="btn edu-mode-btn" id="eduModeBtn" onclick="toggleEducationMode()" title="촬영 기법 교육 설명 표시">🎓 교육 모드</button>
     <button class="btn" onclick="toggleDebug()" title="API 디버그 로그">🐛</button>
+    <button class="btn" onclick="saveProjectToCloud()" title="클라우드에 저장">☁️ 저장</button>
+    <button class="btn" onclick="showCloudPanel()" title="저장된 프로젝트 불러오기">📂 내 프로젝트</button>
+    <button class="btn" onclick="shareCurrentProject()" title="공유 링크 생성">🔗 공유</button>
+    <button class="cloud-auth-btn" id="cloudAuthBtn" onclick="showAuthModal()"><span class="dot"></span><span id="cloudAuthLabel">로그인</span></button>
     <button class="btn btn-primary" onclick="showExportModal()">📤 내보내기</button>
   </div>
 </header>
@@ -2986,6 +3035,53 @@ select.setting-input {
   </div>
 </div>
 
+<!-- Auth Modal -->
+<div class="modal-overlay" id="authModal" onclick="if(event.target===this)hideAuthModal()">
+  <div class="modal" style="max-width:360px;">
+    <button class="modal-close" onclick="hideAuthModal()">✕</button>
+    <h3 style="margin:0 0 20px;">☁️ 클라우드 동기화</h3>
+
+    <!-- 로그인 -->
+    <div id="loginPanel">
+      <div class="auth-form-group"><input type="email" id="authEmail" placeholder="이메일" autocomplete="email" onkeydown="if(event.key==='Enter')signInWithEmail()"></div>
+      <div class="auth-form-group"><input type="password" id="authPassword" placeholder="비밀번호" autocomplete="current-password" onkeydown="if(event.key==='Enter')signInWithEmail()"></div>
+      <p class="auth-err" id="authError"></p>
+      <button id="loginBtn" class="btn btn-primary" style="width:100%" onclick="signInWithEmail()">로그인</button>
+      <p style="text-align:center;margin:14px 0 0;font-size:13px;color:var(--text-muted)">계정이 없으신가요? <a class="auth-link" onclick="showAuthPanel('signup')">회원가입</a></p>
+    </div>
+
+    <!-- 회원가입 -->
+    <div id="signupPanel" style="display:none">
+      <div class="auth-form-group"><input type="email" id="signupEmail" placeholder="이메일" autocomplete="email"></div>
+      <div class="auth-form-group"><input type="password" id="signupPassword" placeholder="비밀번호 (6자 이상)" autocomplete="new-password"></div>
+      <div class="auth-form-group"><input type="password" id="signupConfirm" placeholder="비밀번호 확인" autocomplete="new-password"></div>
+      <p class="auth-err" id="signupError"></p>
+      <button id="signupBtn" class="btn btn-primary" style="width:100%" onclick="signUpWithEmail()">회원가입</button>
+      <p style="text-align:center;margin:14px 0 0;font-size:13px;color:var(--text-muted)"><a class="auth-link" onclick="showAuthPanel('login')">로그인으로 돌아가기</a></p>
+    </div>
+
+    <!-- 프로필 (로그인 상태) -->
+    <div id="profilePanel" style="display:none">
+      <p style="color:var(--text-muted);font-size:13px;margin:0 0 4px">로그인 계정</p>
+      <p id="profileEmail" style="font-weight:600;margin:0 0 20px;word-break:break-all"></p>
+      <button class="btn" style="width:100%;margin-bottom:8px" onclick="showCloudPanel();hideAuthModal()">📂 내 프로젝트 보기</button>
+      <button class="btn" style="width:100%" onclick="signOut()">로그아웃</button>
+    </div>
+  </div>
+</div>
+
+<!-- Cloud Project Panel -->
+<div class="modal-overlay" id="cloudPanel" onclick="if(event.target===this)hideCloudPanel()">
+  <div class="modal" style="max-width:580px;width:92%">
+    <button class="modal-close" onclick="hideCloudPanel()">✕</button>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
+      <h3 style="margin:0">📂 내 프로젝트</h3>
+      <button class="btn btn-primary" onclick="saveProjectToCloud().then(()=>showCloudPanel())" style="font-size:13px">현재 프로젝트 저장</button>
+    </div>
+    <div id="cloudProjectList"><div class="cloud-empty">불러오는 중...</div></div>
+  </div>
+</div>
+
 <!-- Split Scene Modal -->
 <div id="splitSceneModal">
   <div class="split-dialog">
@@ -3126,6 +3222,8 @@ function saveLearningDB(db) {
     const trimmed = { version: 1, entries: db.entries.slice(-300) };
     try { localStorage.setItem(LEARNING_DB_KEY, JSON.stringify(trimmed)); } catch (e) { console.warn('LearningDB save failed:', e); }
   }
+  // 클라우드 동기화 (로그인 시)
+  if (typeof _saveLearningDBToCloud === 'function') _saveLearningDBToCloud(db);
 }
 
 function extractFeatureVector(composition, edgeMap, focusAnalysis, colorAnalysis) {
@@ -7606,7 +7704,7 @@ async function analyzeFrameAdvanced(scene) {
         }
       };
       lighting.lightingDetail = `${buildLightingDetail(lighting)} [votes:${lightingResults.map(item => item.lightingCondition).join('/')}]`;
-    } catch (_) {}
+    } catch (e) { console.debug('lighting analysis failed:', e); }
   }
 
   // === LENS ESTIMATION ===
@@ -10335,7 +10433,7 @@ async function splitSceneAtTime(i, splitTime) {
   try {
     const captured = await captureFrameAtTime(splitTime + Math.min((s.endTime - splitTime) * 0.08, 0.5));
     if (captured) newImage = captured;
-  } catch (_) {}
+  } catch (e) { console.debug('splitScene capture failed:', e); }
 
   const newScene = {
     index: s.index + 1,
@@ -13049,6 +13147,324 @@ async function buildColorArc() {
     <div class="colorarc-palette-row">${paletteRow}</div>
   `;
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SUPABASE CLOUD INTEGRATION
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ── Config ───────────────────────────────────────────────────────────────────
+// build.js 빌드 시 REPLACE_SUPABASE_URL / REPLACE_SUPABASE_ANON_KEY 를 교체합니다.
+// 로컬 테스트 시 아래 값을 직접 입력하거나 build.js를 사용하세요.
+const SUPABASE_URL = 'REPLACE_SUPABASE_URL';
+const SUPABASE_ANON_KEY = 'REPLACE_SUPABASE_ANON_KEY';
+
+// ── Client ───────────────────────────────────────────────────────────────────
+let _supa = null;
+function getSupa() {
+  if (_supa) return _supa;
+  if (typeof supabase === 'undefined') return null;
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return null;
+  _supa = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  return _supa;
+}
+
+// ── Auth State ───────────────────────────────────────────────────────────────
+let currentUser = null;
+let _currentCloudProjectId = null;
+
+async function initSupabase() {
+  const supa = getSupa();
+  if (!supa) return;
+  const { data: { session } } = await supa.auth.getSession();
+  if (session?.user) {
+    currentUser = session.user;
+    _updateAuthUI();
+    _loadLearningDBFromCloud();
+  }
+  supa.auth.onAuthStateChange((_ev, session) => {
+    currentUser = session?.user || null;
+    _updateAuthUI();
+    if (currentUser) _loadLearningDBFromCloud();
+  });
+  // 공유 링크 처리
+  const shareToken = new URLSearchParams(location.search).get('share');
+  if (shareToken) setTimeout(() => loadSharedStoryboard(shareToken), 800);
+}
+
+// ── Auth UI ───────────────────────────────────────────────────────────────────
+function _updateAuthUI() {
+  const btn = document.getElementById('cloudAuthBtn');
+  const label = document.getElementById('cloudAuthLabel');
+  if (!btn || !label) return;
+  if (currentUser) {
+    label.textContent = currentUser.email.split('@')[0];
+    btn.title = currentUser.email;
+    btn.classList.add('signed-in');
+  } else {
+    label.textContent = '로그인';
+    btn.title = '클라우드 동기화를 위해 로그인';
+    btn.classList.remove('signed-in');
+  }
+}
+
+function showAuthModal() {
+  document.getElementById('authModal').classList.add('active');
+  if (currentUser) {
+    document.getElementById('profileEmail').textContent = currentUser.email;
+    showAuthPanel('profile');
+  } else {
+    showAuthPanel('login');
+  }
+}
+function hideAuthModal() { document.getElementById('authModal').classList.remove('active'); }
+
+function showAuthPanel(panel) {
+  ['loginPanel', 'signupPanel', 'profilePanel'].forEach(id => {
+    document.getElementById(id).style.display = (id === panel + 'Panel') ? 'block' : 'none';
+  });
+  // 에러 초기화
+  const errEl = document.getElementById(panel === 'login' ? 'authError' : 'signupError');
+  if (errEl) errEl.textContent = '';
+}
+
+async function signInWithEmail() {
+  const email = document.getElementById('authEmail').value.trim();
+  const password = document.getElementById('authPassword').value;
+  const errEl = document.getElementById('authError');
+  if (!email || !password) { errEl.textContent = '이메일과 비밀번호를 입력해주세요.'; return; }
+  const supa = getSupa();
+  if (!supa) { errEl.textContent = 'Supabase가 설정되지 않았습니다.'; return; }
+  const btn = document.getElementById('loginBtn');
+  btn.textContent = '로그인 중...'; btn.disabled = true;
+  const { error } = await supa.auth.signInWithPassword({ email, password });
+  btn.textContent = '로그인'; btn.disabled = false;
+  if (error) {
+    errEl.textContent = error.message.includes('Invalid') ? '이메일 또는 비밀번호가 올바르지 않습니다.' : error.message;
+  } else {
+    hideAuthModal();
+    showToast('로그인되었습니다 ✓');
+  }
+}
+
+async function signUpWithEmail() {
+  const email = document.getElementById('signupEmail').value.trim();
+  const password = document.getElementById('signupPassword').value;
+  const confirm = document.getElementById('signupConfirm').value;
+  const errEl = document.getElementById('signupError');
+  if (!email || !password) { errEl.textContent = '이메일과 비밀번호를 입력해주세요.'; return; }
+  if (password !== confirm) { errEl.textContent = '비밀번호가 일치하지 않습니다.'; return; }
+  if (password.length < 6) { errEl.textContent = '비밀번호는 6자 이상이어야 합니다.'; return; }
+  const supa = getSupa();
+  if (!supa) { errEl.textContent = 'Supabase가 설정되지 않았습니다.'; return; }
+  const btn = document.getElementById('signupBtn');
+  btn.textContent = '가입 중...'; btn.disabled = true;
+  const { error } = await supa.auth.signUp({ email, password });
+  btn.textContent = '회원가입'; btn.disabled = false;
+  if (error) {
+    errEl.textContent = error.message;
+  } else {
+    errEl.style.color = 'var(--success, #52c41a)';
+    errEl.textContent = '이메일을 확인해주세요. 인증 링크를 클릭하면 로그인됩니다.';
+  }
+}
+
+async function signOut() {
+  const supa = getSupa();
+  if (!supa) return;
+  await supa.auth.signOut();
+  currentUser = null;
+  _currentCloudProjectId = null;
+  _updateAuthUI();
+  hideAuthModal();
+  showToast('로그아웃되었습니다.');
+}
+
+// ── Cloud Save / Load ─────────────────────────────────────────────────────────
+function _compressSceneForCloud(s) {
+  const { multiFrames, _features, ...rest } = s;
+  if (rest.camera) {
+    const { _features: _f, ...camRest } = rest.camera;
+    rest.camera = camRest;
+  }
+  // 썸네일 압축 (160×90, JPEG 50%)
+  if (rest.image && rest.image.startsWith('data:image') && rest.image.length > 30000) {
+    try {
+      const img = new Image(); img.src = rest.image;
+      const c = document.createElement('canvas'); c.width = 160; c.height = 90;
+      c.getContext('2d').drawImage(img, 0, 0, 160, 90);
+      rest.image = c.toDataURL('image/jpeg', 0.5);
+    } catch (e) { console.debug('thumb compress failed:', e); }
+  }
+  return rest;
+}
+
+async function saveProjectToCloud() {
+  const supa = getSupa();
+  if (!supa || !currentUser) { showAuthModal(); return; }
+  if (!scenes || scenes.length === 0) { showToast('저장할 씬이 없습니다.', 'warn'); return; }
+  const name = (videoFile?.name || '').replace(/\.[^.]+$/, '') || '새 프로젝트';
+  const payload = {
+    user_id: currentUser.id,
+    name,
+    video_name: videoFile?.name || '',
+    video_duration: videoDuration || 0,
+    media_type: currentMediaType || 'video',
+    scene_count: scenes.length,
+    thumbnail: scenes[0]?.image?.slice(0, 8000) || null,
+    scenes_json: scenes.map(_compressSceneForCloud),
+    benchmark_json: benchmarkData || null,
+    updated_at: new Date().toISOString()
+  };
+  showToast('저장 중...', 'info');
+  let res;
+  if (_currentCloudProjectId) {
+    res = await supa.from('projects').update(payload)
+      .eq('id', _currentCloudProjectId).eq('user_id', currentUser.id).select('id').single();
+  } else {
+    res = await supa.from('projects').insert(payload).select('id').single();
+  }
+  if (res.error) {
+    console.error('Cloud save:', res.error);
+    showToast('저장 실패: ' + res.error.message, 'error');
+  } else {
+    _currentCloudProjectId = res.data.id;
+    showToast(`"${name}" 클라우드 저장 완료 ✓`);
+  }
+}
+
+async function loadProjectFromCloud(projectId) {
+  const supa = getSupa();
+  if (!supa || !currentUser) return;
+  showToast('불러오는 중...', 'info');
+  const { data, error } = await supa.from('projects')
+    .select('*').eq('id', projectId).eq('user_id', currentUser.id).single();
+  if (error || !data) { showToast('불러오기 실패', 'error'); return; }
+  scenes = data.scenes_json || [];
+  videoDuration = data.video_duration || 0;
+  currentMediaType = data.media_type || 'video';
+  benchmarkData = data.benchmark_json || null;
+  _currentCloudProjectId = data.id;
+  hideCloudPanel();
+  // headerActions 표시
+  document.getElementById('headerActions').style.display = 'flex';
+  renderStoryboard();
+  showToast(`"${data.name}" 불러오기 완료 ✓`);
+}
+
+async function deleteProjectFromCloud(projectId, name) {
+  const supa = getSupa();
+  if (!supa || !currentUser) return;
+  if (!confirm(`"${name}" 프로젝트를 삭제하시겠습니까?`)) return;
+  const { error } = await supa.from('projects').delete()
+    .eq('id', projectId).eq('user_id', currentUser.id);
+  if (error) { showToast('삭제 실패: ' + error.message, 'error'); return; }
+  if (_currentCloudProjectId === projectId) _currentCloudProjectId = null;
+  showToast('삭제됨');
+  showCloudPanel(); // 목록 새로고침
+}
+
+// ── Cloud Panel ────────────────────────────────────────────────────────────────
+async function showCloudPanel() {
+  if (!currentUser) { showAuthModal(); return; }
+  document.getElementById('cloudPanel').classList.add('active');
+  const list = document.getElementById('cloudProjectList');
+  list.innerHTML = '<div class="cloud-empty">불러오는 중...</div>';
+  const supa = getSupa();
+  const { data, error } = await supa.from('projects')
+    .select('id, name, video_name, scene_count, thumbnail, updated_at')
+    .eq('user_id', currentUser.id)
+    .order('updated_at', { ascending: false }).limit(30);
+  if (error || !data?.length) {
+    list.innerHTML = '<div class="cloud-empty">저장된 프로젝트가 없습니다.<br><small>현재 분석 결과를 "현재 프로젝트 저장"으로 저장해보세요.</small></div>';
+    return;
+  }
+  list.innerHTML = data.map(p => `
+    <div class="cloud-project-item">
+      <div class="cloud-project-thumb">
+        ${p.thumbnail ? `<img src="${p.thumbnail}" alt="" style="width:72px;height:40px;object-fit:cover;border-radius:4px">` : '<div style="width:72px;height:40px;background:var(--bg-hover);border-radius:4px"></div>'}
+      </div>
+      <div style="flex:1;min-width:0">
+        <div class="cloud-project-name">${p.name}</div>
+        <div class="cloud-project-meta">${p.scene_count}개 씬 · ${new Date(p.updated_at).toLocaleDateString('ko-KR')}</div>
+      </div>
+      <div class="cloud-project-actions">
+        <button class="btn-xs" onclick="loadProjectFromCloud('${p.id}')">불러오기</button>
+        <button class="btn-xs btn-danger" onclick="deleteProjectFromCloud('${p.id}', '${p.name.replace(/'/g, "\\'")}')">삭제</button>
+      </div>
+    </div>
+  `).join('');
+}
+function hideCloudPanel() { document.getElementById('cloudPanel').classList.remove('active'); }
+
+// ── Share ──────────────────────────────────────────────────────────────────────
+async function shareCurrentProject() {
+  const supa = getSupa();
+  if (!supa || !currentUser) { showAuthModal(); return; }
+  if (!_currentCloudProjectId) {
+    showToast('먼저 저장한 뒤 공유할 수 있습니다.', 'warn');
+    await saveProjectToCloud();
+    if (!_currentCloudProjectId) return;
+  }
+  const { data: existing } = await supa.from('shared_storyboards')
+    .select('share_token').eq('project_id', _currentCloudProjectId).maybeSingle();
+  let token = existing?.share_token;
+  if (!token) {
+    const { data, error } = await supa.from('shared_storyboards')
+      .insert({ project_id: _currentCloudProjectId, user_id: currentUser.id })
+      .select('share_token').single();
+    if (error) { showToast('공유 링크 생성 실패', 'error'); return; }
+    token = data.share_token;
+  }
+  const url = `${location.origin}${location.pathname}?share=${token}`;
+  try {
+    await navigator.clipboard.writeText(url);
+    showToast('공유 링크가 클립보드에 복사됐습니다 ✓');
+  } catch (_) {
+    prompt('공유 링크:', url);
+  }
+}
+
+async function loadSharedStoryboard(token) {
+  const supa = getSupa();
+  if (!supa) return;
+  showToast('공유 스토리보드 불러오는 중...', 'info');
+  const { data, error } = await supa.from('shared_storyboards')
+    .select('is_active, projects!inner(name, video_name, video_duration, media_type, scenes_json, benchmark_json, scene_count)')
+    .eq('share_token', token).single();
+  if (error || !data?.is_active) { showToast('공유된 스토리보드를 찾을 수 없습니다.', 'error'); return; }
+  const p = data.projects;
+  scenes = p.scenes_json || [];
+  videoDuration = p.video_duration || 0;
+  currentMediaType = p.media_type || 'video';
+  benchmarkData = p.benchmark_json || null;
+  document.getElementById('headerActions').style.display = 'flex';
+  renderStoryboard();
+  showToast(`"${p.name}" 공유 스토리보드 ✓`);
+}
+
+// ── Learning DB Cloud Sync ────────────────────────────────────────────────────
+async function _loadLearningDBFromCloud() {
+  const supa = getSupa();
+  if (!supa || !currentUser) return;
+  const { data, error } = await supa.from('learning_profiles')
+    .select('learning_db').eq('user_id', currentUser.id).maybeSingle();
+  if (!error && data?.learning_db) {
+    try { localStorage.setItem(LEARNING_DB_KEY, JSON.stringify(data.learning_db)); } catch (_) {}
+  }
+}
+async function _saveLearningDBToCloud(db) {
+  const supa = getSupa();
+  if (!supa || !currentUser) return;
+  await supa.from('learning_profiles').upsert(
+    { user_id: currentUser.id, learning_db: db, updated_at: new Date().toISOString() },
+    { onConflict: 'user_id' }
+  );
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  initSupabase().catch(e => console.debug('Supabase init:', e));
+});
 </script>
 
 <!-- Production Schedule Overlay -->

@@ -6,6 +6,7 @@
   "main": "local-app.js",
   "scripts": {
     "start": "node local-app.js",
-    "print-url": "node local-app.js --print-url"
+    "print-url": "node local-app.js --print-url",
+    "build": "node build.js"
   }
 }
