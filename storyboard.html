@@ -3204,7 +3204,7 @@ let benchmarkComparison = null;
 
 // ?? ?숈뒿 DB ??????????????????????????????????????????????????????????????
 const LEARNING_DB_KEY = 'storyframe_learning_v1';
-const LEARNING_THRESHOLD = 0.92;
+const LEARNING_THRESHOLD = 0.80; // Lowered from 0.92: broader match coverage while still filtering noise
 const MAX_ENTRIES_PER_FIELD = 200;
 
 function loadLearningDB() {
@@ -3228,7 +3228,7 @@ function saveLearningDB(db) {
   if (typeof _saveLearningDBToCloud === 'function') _saveLearningDBToCloud(db);
 }
 
-function extractFeatureVector(composition, edgeMap, focusAnalysis, colorAnalysis) {
+function extractFeatureVector(composition, edgeMap, focusAnalysis, colorAnalysis, motionData = null) {
   const v = [];
   // 3횞3 ?곸뿭蹂?諛앷린 (0~1), 梨꾨룄 (0~1) = 18李⑥썝
   for (let i = 0; i < 9; i++) v.push(composition.regions[i].brightness / 255);
@@ -3272,6 +3272,24 @@ function extractFeatureVector(composition, edgeMap, focusAnalysis, colorAnalysis
   v.push(composition.emptyRegionRatio);
   v.push(composition.leftOpenness);
   v.push(composition.rightOpenness);
+  // Motion features = 5 dimensions (stored so movement corrections can transfer)
+  // Derived from returned motionData fields (type, speed, smoothness, direction)
+  if (motionData) {
+    const SPEED_MAP = { 'none': 0, 'slow': 0.2, 'medium': 0.5, 'fast': 0.75, 'very-fast': 1.0 };
+    v.push(SPEED_MAP[motionData.speed] ?? 0);  // motion magnitude proxy
+    const dir = motionData.direction || '';
+    v.push(dir.includes('right') ? 1 : dir.includes('left') ? 0 : 0.5);  // horiz direction
+    v.push(dir.includes('down') ? 1 : dir.includes('up') ? 0 : 0.5);     // vert direction
+    v.push(motionData.smoothness ?? 1.0);
+    // Motion type category (scale movements)
+    const t = motionData.type || 'Static';
+    const scaleVal = t.includes('Zoom-in') || t.includes('Push-in') ? 1
+                   : t.includes('Zoom-out') || t.includes('Pull-out') ? 0 : 0.5;
+    v.push(scaleVal);
+  } else {
+    // No motion data: push neutral values so vector length stays consistent
+    v.push(0); v.push(0.5); v.push(0.5); v.push(1.0); v.push(0.5);
+  }
   return v;
 }
 
@@ -7549,6 +7567,9 @@ async function analyzeFrameAdvanced(scene) {
   // 1. Edge detection (Sobel-like) for focus analysis
   const edgeMap = computeEdgeMap(pixels, w, h);
   
+  // 1.5. Content mode detection (animation vs live-action)
+  const contentMode = detectContentMode(pixels, w, h, edgeMap);
+  
   // 2. Spatial composition analysis (where is visual weight?)
   const composition = analyzeComposition(pixels, w, h);
   
@@ -7566,7 +7587,7 @@ async function analyzeFrameAdvanced(scene) {
   const motionData = await estimateMotion(scene);
   
   // === SHOT SIZE ESTIMATION ===
-  let shotSize = estimateShotSize(composition, edgeMap, w, h, focusAnalysis, faceAnalysis, poseAnalysis);
+  let shotSize = estimateShotSize(composition, edgeMap, w, h, focusAnalysis, faceAnalysis, poseAnalysis, contentMode);
   let compositionTag = estimateCompositionTag(composition, faceAnalysis, poseAnalysis, focusAnalysis, edgeMap);
   let lighting = estimateLighting(colorAnalysis, composition, faceAnalysis, edgeMap, pixels, w, h, poseAnalysis);
 
@@ -7597,7 +7618,7 @@ async function analyzeFrameAdvanced(scene) {
         const vColor = analyzeColorDistribution(vpx, vw, vh);
         const vfa = await analyzeFaces(vCanvas, vw, vh);
         const vpa = await analyzePoseFrame(vCanvas, vw, vh, vfa);
-        const vs = estimateShotSize(vc, ve, vw, vh, vf, vfa, vpa);
+        const vs = estimateShotSize(vc, ve, vw, vh, vf, vfa, vpa, contentMode);
         const vComp = estimateCompositionTag(vc, vfa, vpa, vf, ve);
         const vLight = estimateLighting(vColor, vc, vfa, ve, vpx, vw, vh, vpa);
         votes.push(vs.type);
@@ -7710,7 +7731,7 @@ async function analyzeFrameAdvanced(scene) {
   }
 
   // === LENS ESTIMATION ===
-  const lens = estimateLens(focusAnalysis, edgeMap, w, h, colorAnalysis, shotSize, faceAnalysis, poseAnalysis);
+  const lens = estimateLens(focusAnalysis, edgeMap, w, h, colorAnalysis, shotSize, faceAnalysis, poseAnalysis, contentMode);
 
   // === CAMERA MOVEMENT ===
   const movement = motionData;
@@ -7723,42 +7744,48 @@ async function analyzeFrameAdvanced(scene) {
   const framing = estimateFraming(faceAnalysis, poseAnalysis, composition);
   
   // ?? ?숈뒿 DB ?곸슜 ??????????????????????????????????????????????????????
-  const _features = extractFeatureVector(composition, edgeMap, focusAnalysis, colorAnalysis);
+  const _features = extractFeatureVector(composition, edgeMap, focusAnalysis, colorAnalysis, motionData);
   const _learnedOverrides = {};
   for (const field of ['shotSize','framing','movement','lensType','angle','dof','lightingType','lightingCondition','composition']) {
     const match = findLearningMatch(_features, field);
-    if (match) _learnedOverrides[field] = match.label;
+    if (match) _learnedOverrides[field] = { label: match.label, sim: match.similarity };
   }
   const L = _learnedOverrides;
+  // Calibrated confidence: sim 0.80 -> 0.72, sim 1.0 -> 0.94
+  // (replaces flat 1.0 which was overconfident)
+  const learnLabel = f => L[f] ? L[f].label : null;
+  const learnConf  = (f, fallback) => L[f]
+    ? clamp(0.72 + (L[f].sim - 0.80) * 1.1, 0.72, 0.94)
+    : fallback;
   // ??????????????????????????????????????????????????????????????????????
 
   return {
-    shotSize:           L.shotSize          || shotSize.type,
-    shotSizeConf:       L.shotSize          ? 1.0 : shotSize.confidence,
+    shotSize:           learnLabel('shotSize')  || shotSize.type,
+    shotSizeConf:       learnConf('shotSize',    shotSize.confidence),
     shotSizeDetail:     shotSize.detail,
     shotSizeMetrics:    shotSize.metrics || null,
-    framing:            L.framing           || framing,
-    lensType:           L.lensType          || lens.type,
-    lensConf:           L.lensType          ? 1.0 : lens.confidence,
+    framing:            learnLabel('framing')   || framing,
+    lensType:           learnLabel('lensType')  || lens.type,
+    lensConf:           learnConf('lensType',    lens.confidence),
     lensDetail:         lens.detail,
     lensFocalRange:     lens.focalRange     ?? null,
-    movement:           L.movement          || movement.type,
-    movementConf:       L.movement          ? 1.0 : movement.confidence,
+    movement:           learnLabel('movement')  || movement.type,
+    movementConf:       learnConf('movement',    movement.confidence),
     movementDetail:     movement.detail,
     movementDirection:  movement.direction  ?? null,
     movementSpeed:      movement.speed      ?? null,
     movementSmoothness: movement.smoothness ?? null,
-    angle:              L.angle             || angle.type,
-    angleConf:          L.angle             ? 1.0 : angle.confidence,
+    angle:              learnLabel('angle')     || angle.type,
+    angleConf:          learnConf('angle',       angle.confidence),
     angleDetail:        angle.detail,
     angleTilt:          angle.tilt          ?? null,
-    dof:                L.dof               || dof.type,
-    dofConf:            L.dof               ? 1.0 : dof.confidence,
+    dof:                learnLabel('dof')       || dof.type,
+    dofConf:            learnConf('dof',         dof.confidence),
     dofDetail:          dof.detail,
     dofFocusPlane:      dof.focusPlane      ?? null,
     dofSeparation:      dof.separation      ?? null,
-    lightingType:       L.lightingType      || lighting.lightingType,
-    lightingCondition:  L.lightingCondition || lighting.lightingCondition,
+    lightingType:       learnLabel('lightingType')      || lighting.lightingType,
+    lightingCondition:  learnLabel('lightingCondition') || lighting.lightingCondition,
     lightingDirection:  lighting.lightingDirection  ?? null,
     lightingHardness:   lighting.lightingHardness   ?? null,
     lightingContrast:   lighting.lightingContrast   ?? null,
@@ -7772,9 +7799,9 @@ async function analyzeFrameAdvanced(scene) {
     lightingConf:       lighting.lightingConf       ?? null,
     lightingDetail:     lighting.lightingDetail     ?? null,
     lightingMetrics:    lighting.metrics            ?? null,
-    composition:        L.composition       || compositionTag.type,
-    compositionConf:    L.composition       ? 1.0 : compositionTag.confidence,
-    compositionDetail:  L.composition       ? 'Learned override from benchmark memory' : compositionTag.detail,
+    composition:        learnLabel('composition')   || compositionTag.type,
+    compositionConf:    learnConf('composition',    compositionTag.confidence),
+    compositionDetail:  L.composition ? `Learned override (sim=${L.composition.sim.toFixed(3)})` : compositionTag.detail,
     compositionMetrics: compositionTag.metrics || null,
     compositionSubtype:  compositionTag.compositionSubtype  ?? null,
     compositionBalance:  compositionTag.compositionBalance  ?? null,
@@ -8220,7 +8247,56 @@ function _estimateSubjectHeightByProjection(edgeMap, w, h) {
   return found ? (bot - top) / h : 0.5;
 }
 
-function estimateShotSize(composition, edgeMap, w, h, focus, faceAnalysis, poseAnalysis) {
+// === Content Mode Detection: Animation vs Live-action ===
+// Returns { score, isAnimation, confidence, detail }
+// score: 0 = live-action, 1 = animation
+function detectContentMode(pixels, w, h, edgeMap) {
+  // Signal 1: Saturation entropy
+  // Animation uses a small hand-chosen palette → low entropy
+  // Live-action has continuous natural variation → high entropy
+  const SAT_BINS = 16;
+  const satHist = new Array(SAT_BINS).fill(0);
+  let satCount = 0;
+  for (let i = 0; i < w * h; i++) {
+    const r = pixels[i * 4], g = pixels[i * 4 + 1], b = pixels[i * 4 + 2];
+    const maxC = Math.max(r, g, b), minC = Math.min(r, g, b);
+    const s = maxC > 0 ? (maxC - minC) / maxC : 0;
+    if (s > 0.08) {
+      satHist[Math.min(Math.floor(s * SAT_BINS), SAT_BINS - 1)]++;
+      satCount++;
+    }
+  }
+  let satEntropy = 0;
+  if (satCount > 0) {
+    for (const cnt of satHist) {
+      if (cnt > 0) { const p = cnt / satCount; satEntropy -= p * Math.log2(p); }
+    }
+  }
+  // Animation: ~2–3.5 bits / Live-action: ~4.5–6.5 bits
+  const satEntropyScore = clamp((4.0 - satEntropy) / 1.5, 0, 1);
+
+  // Signal 2: Distinct color count (animation uses fewer distinct colors)
+  const totalPx = w * h;
+  const sampleStep = Math.max(1, Math.floor(totalPx / 2000));
+  const colorSet = new Set();
+  for (let i = 0; i < totalPx; i += sampleStep) {
+    const r5 = pixels[i * 4] >> 3, g5 = pixels[i * 4 + 1] >> 3, b5 = pixels[i * 4 + 2] >> 3;
+    colorSet.add((r5 << 10) | (g5 << 5) | b5);
+  }
+  // Animation: <300 distinct 5-bit colors / Live-action: >600
+  const colorQuantScore = clamp((300 - colorSet.size) / 250, 0, 1);
+
+  const raw = satEntropyScore * 0.55 + colorQuantScore * 0.45;
+  const isAnimation = raw > 0.45;
+  return {
+    score: raw,
+    isAnimation,
+    confidence: Math.min(Math.abs(raw - 0.45) * 2.2, 1.0),
+    detail: `satEntropy=${satEntropy.toFixed(2)} colorCount=${colorSet.size} animScore=${raw.toFixed(2)}`
+  };
+}
+
+function estimateShotSize(composition, edgeMap, w, h, focus, faceAnalysis, poseAnalysis, contentMode = null) {
   const skinRatio = composition.skinToneRatio;
   const centerW = composition.centerWeight;
   const edgeDensity = edgeMap.avgEdge;
@@ -8236,17 +8312,32 @@ function estimateShotSize(composition, edgeMap, w, h, focus, faceAnalysis, poseA
     const headRoomAdj = pose.headRoom > 0.12 ? Math.min((pose.headRoom - 0.12) * 0.55, 0.10) : 0;
     const faceHeight = Math.max(0, rawFaceH - headRoomAdj);
 
+    // Animation proportion correction:
+    // Animated characters often have larger heads relative to body (anime ~1/3, realistic ~1/7.5)
+    // This causes face-height thresholds to classify shots 1-2 categories too tight.
+    let proportionFactor = 1.0;
+    if (contentMode && contentMode.isAnimation && contentMode.confidence > 0.25 && subjectHeight > 0.05) {
+      const measuredHeadBodyRatio = (pose.faceHeightRatio || 0) / subjectHeight;
+      if (measuredHeadBodyRatio > 0.20) {
+        // Realistic head-body ratio ~0.145; anime/cartoon ~0.22-0.40
+        const rawFactor = measuredHeadBodyRatio / 0.145;
+        proportionFactor = clamp(1.0 + (rawFactor - 1.0) * contentMode.confidence, 1.0, 2.5);
+      }
+    }
+    // adjustedFaceH is used for threshold comparisons (faceHeight kept for metrics)
+    const adjustedFaceH = proportionFactor > 1.0 ? faceHeight / proportionFactor : faceHeight;
+
     let type = 'MS';
 
-    if (faceHeight >= 0.72 || subjectArea > 0.58) {
+    if (adjustedFaceH >= 0.72 || subjectArea > 0.58) {
       type = 'ECU';
-    } else if (faceHeight >= 0.55 || subjectArea > 0.34) {
+    } else if (adjustedFaceH >= 0.55 || subjectArea > 0.34) {
       type = 'BCU';
     } else if (pose.cropLevel === 'face' || pose.cropLevel === 'chin'
-        || (pose.cropLevel === 'head' && faceHeight >= 0.3) || faceHeight >= 0.38) {
+        || (pose.cropLevel === 'head' && adjustedFaceH >= 0.3) || adjustedFaceH >= 0.38) {
       type = 'CU';
     } else if (pose.cropLevel === 'throat' || pose.cropLevel === 'shoulders'
-        || pose.cropLevel === 'chest' || faceHeight >= 0.22) {
+        || pose.cropLevel === 'chest' || adjustedFaceH >= 0.22) {
       type = 'MCU';
     } else if (pose.cropLevel === 'waist') {
       type = 'MS';
@@ -8319,9 +8410,10 @@ function estimateShotSize(composition, edgeMap, w, h, focus, faceAnalysis, poseA
     return {
       type,
       confidence: conf,
-      detail: `포즈 기준 추정: 피사체 높이 ${Math.round(subjectHeight * 100)}%, 얼굴 높이 ${Math.round(rawFaceH * 100)}% (보정 ${Math.round(faceHeight * 100)}%), 크롭 ${pose.cropLevel}, 인원 ${poseAnalysis.count}명으로 ${type}에 가깝습니다.`,
+      detail: `포즈 기준 추정: 피사체 높이 ${Math.round(subjectHeight * 100)}%, 얼굴 높이 ${Math.round(rawFaceH * 100)}% (보정 ${Math.round(adjustedFaceH * 100)}%${proportionFactor > 1.0 ? ` [anim보정×${proportionFactor.toFixed(2)}]` : ''}), 크롭 ${pose.cropLevel}, 인원 ${poseAnalysis.count}명으로 ${type}에 가깝습니다.`,
       metrics: {
-        subjectHeight, subjectArea, faceHeight: rawFaceH, effectiveFaceHeight: faceHeight,
+        subjectHeight, subjectArea, faceHeight: rawFaceH, effectiveFaceHeight: adjustedFaceH,
+        proportionFactor, isAnimContent: contentMode?.isAnimation || false,
         cropLevel: pose.cropLevel, poseCount: poseAnalysis.count,
         headRoom: pose.headRoom, footRoom: pose.footRoom
       }
@@ -8560,6 +8652,25 @@ async function estimateMotion(scene) {
     const subStableXY   = Math.abs(subDX) < 0.07 && Math.abs(subDY) < 0.07;
     const subStableSize = Math.abs(subDS) < 0.06;
 
+    // Subject motion alignment check:
+    // If global optical flow direction matches where the subject moved,
+    // the flow is likely measuring character animation, NOT camera movement.
+    // subjectMotionAlignment: 0 = flow perfectly matches subject = character anim
+    //                         1 = flow independent of subject = real camera move
+    let subjectMotionAlignment = 1.0;
+    if (subjectPresent && (Math.abs(subDX) > 0.06 || Math.abs(subDY) > 0.06)) {
+      // Convert normalized subject delta to coarse-pixel units
+      const subDxPx = subDX * COARSE_W;
+      const subDyPx = subDY * COARSE_W;
+      const alignX = Math.abs(avgDx) > 0.3
+        ? Math.abs(avgDx - subDxPx) / (Math.abs(avgDx) + 0.01)
+        : 1.0;
+      const alignY = Math.abs(avgDy) > 0.3
+        ? Math.abs(avgDy - subDyPx) / (Math.abs(avgDy) + 0.01)
+        : 1.0;
+      subjectMotionAlignment = clamp((alignX + alignY) / 2, 0, 1);
+    }
+
     // ?? Rack-focus: monotonic sharpness change, camera otherwise still ???????
     let isRackFocus = false;
     if (sharpnessVals.length >= 3) {
@@ -8641,6 +8752,16 @@ async function estimateMotion(scene) {
     if (smoothness > 0.68 && avgMagnitude > 1.0 && avgGain > 0.10 && !subjectPresent && avgResidual < 0.105) {
       return { type: 'Drone', confidence: clamp(0.56 + smoothness * 0.28, 0.56, 0.82),
         detail: 'The move is smooth, multi-axis, and lacks a stable foreground subject, which is closer to drone or aerial motion.', direction: dirLabel(avgDx, avgDy), speed, smoothness };
+    }
+
+    // Subject motion alignment override:
+    // If global flow aligns closely with tracked subject movement,
+    // the camera is likely static and we're seeing character animation.
+    if (subjectMotionAlignment < 0.30 && avgResidual > 0.07 && avgGain > 0.05 && avgMagnitude > 0.7) {
+      const motConf = clamp(0.56 + (0.30 - subjectMotionAlignment) * 0.7, 0.56, 0.78);
+      return { type: 'Static', confidence: motConf,
+        detail: 'Global optical flow aligns closely with tracked subject movement \u2014 likely character animation on a static camera.',
+        direction: null, speed: 'none', smoothness: 1.0 };
     }
 
     // Pan / Trucking (horizontal dominant)
