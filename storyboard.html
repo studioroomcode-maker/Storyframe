@@ -8396,7 +8396,9 @@ function estimateShotSize(composition, edgeMap, w, h, focus, faceAnalysis, poseA
   const poseReliable = (() => {
     const p = poseAnalysis?.primary;
     if (!p) return false;
-    if (p.confidence < 0.45) return false;           // too many low-confidence landmarks
+    // For animation: raise confidence bar since MediaPipe wasn't trained on drawn characters
+    const poseMinConf = (contentMode && contentMode.isAnimation && contentMode.confidence > 0.40) ? 0.55 : 0.45;
+    if (p.confidence < poseMinConf) return false;    // too many low-confidence landmarks
     if (p.cropLevel === 'unknown') return false;     // no identifiable body part
     const ar = p.heightRatio / Math.max(p.widthRatio, 0.01);
     if (ar < 0.4 || ar > 10.0) return false;        // physically impossible aspect ratio
@@ -9087,6 +9089,19 @@ function estimateAngle(composition, color, w, h, faceAnalysis, poseAnalysis, edg
     (contentMode && contentMode.isAnimation && contentMode.confidence > 0.40)
       ? Math.min(v, 0.70)
       : v;
+
+  // P2-1: Animation-safe effective signals.
+  // Sky/ground brightness and foreshortening ratio are based on real-world
+  // camera physics and are unreliable in drawn animation.
+  // Replace them with neutral values when animation is detected.
+  const isAnimScene = contentMode && contentMode.isAnimation && contentMode.confidence > 0.40;
+  const effSkyLikely    = isAnimScene ? false : skyLikely;
+  const effGroundLikely = isAnimScene ? false : groundLikely;
+  // Dampen vertBias for animation (keep 30% to preserve mild composition cues)
+  const effVertBias     = isAnimScene ? vertBias * 0.30 : vertBias;
+  // faceToBody foreshortening is meaningless for animated characters
+  const effFaceToBody   = isAnimScene ? 0.35 : faceToBody;  // 0.35 = neutral (neither low nor high)
+
   const shotType = shotSize?.type || shotSize || '';
   const subject  = getPrimarySubject(faceAnalysis, poseAnalysis);
   const pose     = poseAnalysis?.primary || null;
@@ -9187,36 +9202,36 @@ function estimateAngle(composition, color, w, h, faceAnalysis, poseAnalysis, edg
     //   ??face/head at very top of frame, tall body fill, sky/ceiling visible, under-chin view
     const wormsScore =
       clamp((0.30 - subjectY) / 0.22, 0, 1) * 0.40 +
-      (skyLikely ? 0.22 : 0) +
-      clamp((vertBias - 0.15) / 0.35, 0, 1) * 0.18 +
+      (effSkyLikely ? 0.22 : 0) +
+      clamp((effVertBias - 0.15) / 0.35, 0, 1) * 0.18 +
       clamp((subjectSize - 0.55) / 0.30, 0, 1) * 0.12 +
-      (faceToBody < 0.22 && subjectSize > 0.45 ? 0.08 : 0);
+      (effFaceToBody < 0.22 && subjectSize > 0.45 ? 0.08 : 0);
 
     // LOW: camera below subject eye level, looking up 15-45째
     //   ??subject in upper frame, sky often visible, top brighter
     const lowScore =
       clamp((0.44 - subjectY) / 0.28, 0, 1) * 0.38 +
-      (skyLikely ? 0.18 : 0) +
-      clamp((vertBias - 0.08) / 0.35, 0, 1) * 0.20 +
+      (effSkyLikely ? 0.18 : 0) +
+      clamp((effVertBias - 0.08) / 0.35, 0, 1) * 0.20 +
       (composition.topOpenness > 0.50 ? 0.10 : 0) +
       (rowTop > 0.38 ? clamp((rowTop - 0.38) / 0.20, 0, 1) * 0.10 : 0) +
-      (faceToBody < 0.28 && subjectSize > 0.22 ? 0.04 : 0);
+      (effFaceToBody < 0.28 && subjectSize > 0.22 ? 0.04 : 0);
 
     // HIGH: camera above subject, looking down 15-45째
     //   ??subject in lower frame, floor/ground visible, top brighter or darker
     const highScore =
       clamp((subjectY - 0.55) / 0.28, 0, 1) * 0.38 +
-      clamp((-vertBias - 0.08) / 0.28, 0, 1) * 0.22 +
+      clamp((-effVertBias - 0.08) / 0.28, 0, 1) * 0.22 +
       (composition.bottomHeavy ? 0.12 : 0) +
-      (groundLikely ? 0.14 : 0) +
+      (effGroundLikely ? 0.14 : 0) +
       (rowBot > 0.38 ? clamp((rowBot - 0.38) / 0.20, 0, 1) * 0.10 : 0) +
-      (faceToBody > 0.52 && subjectSize > 0.15 ? 0.04 : 0);
+      (effFaceToBody > 0.52 && subjectSize > 0.15 ? 0.04 : 0);
 
     // EYE-LEVEL: camera at subject eye height, ~0째 tilt
     //   ??subject centered vertically, balanced brightness, centroid near middle
     const eyeScore =
       clamp(1 - Math.abs(subjectY - 0.50) / 0.17, 0, 1) * 0.40 +
-      clamp(1 - Math.abs(vertBias) / 0.15, 0, 1) * 0.28 +
+      clamp(1 - Math.abs(effVertBias) / 0.15, 0, 1) * 0.28 +
       clamp(1 - Math.abs(centroidY - 0.50) / 0.16, 0, 1) * 0.18 +
       (Math.abs(rowTop - rowBot) < 0.08 ? 0.14 : 0);
 
@@ -9224,7 +9239,7 @@ function estimateAngle(composition, color, w, h, faceAnalysis, poseAnalysis, edg
     //   ??subject in upper-center, MCU/CU shots, minimal vertical bias
     const shoulderScore =
       clamp(1 - Math.abs(subjectY - 0.56) / 0.14, 0, 1) * 0.40 +
-      clamp(1 - Math.abs(vertBias - 0.04) / 0.12, 0, 1) * 0.22 +
+      clamp(1 - Math.abs(effVertBias - 0.04) / 0.12, 0, 1) * 0.22 +
       (['MCU', 'CU', 'BCU', 'MS', 'Cowboy'].includes(shotType) ? 0.24 : 0) +
       (faceH > 0.12 && faceH < 0.40 ? 0.14 : 0);
 
@@ -9265,10 +9280,10 @@ function estimateAngle(composition, color, w, h, faceAnalysis, poseAnalysis, edg
     if (composition.centerWeight < 0.16 && composition.bottomHeavy && vertBias < -0.14) {
       return { type: 'Overhead', confidence: animConfCap(0.50), detail: 'A centered top-down layout with little subject prominence suggests an overhead angle.', tilt: 60 };
     }
-    if (skyLikely && vertBias > 0.14) {
+    if (effSkyLikely && effVertBias > 0.14) {
       return { type: 'Low', confidence: animConfCap(0.48), detail: 'An open upper frame and upward bias suggest a low angle.', tilt: -20 };
     }
-    if (vertBias < -0.20 && composition.bottomHeavy) {
+    if (effVertBias < -0.20 && composition.bottomHeavy) {
       return { type: 'High', confidence: animConfCap(0.47), detail: 'Downward framing without a dominant subject suggests a high angle.', tilt: 28 };
     }
   }
@@ -9763,6 +9778,15 @@ SHOT SIZE: Base on head-to-frame ratio and body-part cutoffs, NOT on body area p
   const analysisPrompt = `${frameScope}
 Scene duration: ${scene.duration.toFixed(1)} seconds.
 
+${scene.multiFrames ? `STEP 0 - FRAME CONSISTENCY CHECK (required for multi-frame):
+Compare Frame 1 vs the last provided frame. For each item, write your observation:
+a) Pick 2-3 fixed background objects (wall edge, window frame, tree trunk, building corner)
+b) DOCUMENT position of each: "[object] is at [position] in F1, at [position] in F3"
+c) If positions changed: estimate direction (left/right/up/down) and magnitude (small<5%/medium/large>20%)
+d) Subject size change F1 vs F3: larger/smaller/same? (zoom/dolly indicator)
+REQUIRED output: "Background shift: [none / left / right / up / down], magnitude: [small/medium/large]"
+REQUIRED output: "Subject scale change: [larger / smaller / unchanged]"
+` : ''}
 STEP 1 - MEDIUM IDENTIFICATION (complete before any other classification):
 Identify: [ ] Live-action  [ ] CG animation  [ ] 2D/cel animation  [ ] Mixed
 Evidence: describe color palette variety, edge sharpness type, texture detail.
@@ -9775,11 +9799,20 @@ d) If animation: use head-to-frame ratio and body-part cutoffs, NOT body area pe
 e) Conclude shot size from observations above
 
 STEP 3 - CAMERA MOVEMENT reasoning chain (follow before answering):
-a) Identify 2-3 stable background reference elements across all frames
+${scene.multiFrames ? 'a) USE Step 0 background shift result as your primary evidence' : 'a) Identify 2-3 stable background reference elements and estimate if they shifted'}
 b) Do ALL pixels shift uniformly? (camera) OR only certain objects? (subject motion)
 c) If animation: does the BACKGROUND LAYER move? If no -> STATIC, only character animates
 d) Zoom vs Dolly: Zoom=subject scales but background proportions unchanged; Dolly=background diverges
-e) Conclude movement type
+e) Step 0 magnitude: small shift(<5%) -> likely Static/Handheld; large shift(>20%) -> definite Pan/Tilt
+f) Conclude movement type
+
+STEP 3b - LENS EVIDENCE checklist (check each before naming lens type):
+[ ] Bokeh visible? (circular=normal/telephoto, oval/anamorphic=anamorphic)
+[ ] Background detail: compressed/flat vs spatially spread? (compressed=telephoto)
+[ ] Edge of frame: straight lines stay straight? (curved=wide/ultra-wide)
+[ ] Subject at frame edge: stretched/elongated? (yes=wide)
+[ ] Depth planes: how many distinct focus planes visible?
+[ ] If animation: is DOF deliberately rendered (visible blur gradient)? If no -> report Normal
 
 Classify the scene:
 - Shot size: ECU, BCU, CU, MCU, MS, Cowboy, MLS, FS, LS, ELS, Establishing, INSERT
