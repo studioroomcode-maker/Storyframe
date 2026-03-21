@@ -6305,38 +6305,48 @@ function estimateFraming(faceAnalysis, poseAnalysis, composition) {
   const faceCount = faceAnalysis?.count || 0;
   const poseCount = poseAnalysis?.count || 0;
   const count = Math.max(faceCount, poseCount);
+  const fr = (type, confidence) => ({ type, confidence });
 
-  if (!count) return composition.hasFace ? 'Single' : 'Empty';
-  if (count > 3) return 'Crowd';
-  if (count === 3) return 'Three-shot';
+  if (!count) return fr(composition.hasFace ? 'Single' : 'Empty', composition.hasFace ? 0.60 : 0.70);
+  if (count > 3) return fr('Crowd', 0.88);
+  if (count === 3) return fr('Three-shot', 0.86);
 
   const faceBoxes = faceAnalysis?.boxes || [];
   if (count >= 2) {
+    // OTS: one face at edge (small, background) + one face at center (larger, foreground)
     const edgeFace = faceBoxes.find(box =>
-      box.area > 0.03
-      && box.height > 0.2
-      && (box.cx < 0.2 || box.cx > 0.8)
+      box.area > 0.02        // relaxed from 0.03
+      && box.height > 0.18   // relaxed from 0.20
+      && (box.cx < 0.22 || box.cx > 0.78)
     );
     const centerFace = faceBoxes.find(box =>
-      box.height > 0.12
-      && box.cx > 0.3
-      && box.cx < 0.7
+      box.height > 0.10      // relaxed from 0.12
+      && box.cx > 0.28
+      && box.cx < 0.72
     );
-    if (edgeFace && centerFace) return 'OTS';
+    if (edgeFace && centerFace) {
+      // Confidence based on how distinct the edge/center separation is
+      const separation = Math.abs(edgeFace.cx - centerFace.cx);
+      return fr('OTS', clamp(0.64 + separation * 0.6, 0.64, 0.84));
+    }
 
     const poses = poseAnalysis?.poses || [];
     const edgePose = poses.find(pose =>
-      pose.widthRatio > 0.2
-      && (pose.centerX < 0.2 || pose.centerX > 0.8)
+      pose.widthRatio > 0.15   // relaxed from 0.20
+      && (pose.centerX < 0.22 || pose.centerX > 0.78)
     );
-    const centerPose = poses.find(pose => pose.centerX > 0.3 && pose.centerX < 0.7);
-    if (edgePose && centerPose) return 'OTS';
+    const centerPose = poses.find(pose => pose.centerX > 0.28 && pose.centerX < 0.72);
+    if (edgePose && centerPose) return fr('OTS', 0.64);
 
-    return count === 2 ? 'Two-shot' : 'Three-shot';
+    return fr(count === 2 ? 'Two-shot' : 'Three-shot', 0.84);
   }
 
-  if (faceAnalysis?.framing === 'OTS') return 'OTS';
-  return 'Single';
+  if (faceAnalysis?.framing === 'OTS') return fr('OTS', 0.60);
+  // Single subject: confidence based on detection strength
+  const singleConf = faceAnalysis?.count > 0
+    ? clamp(0.72 + (faceAnalysis.largestAreaRatio ?? 0) * 2.0, 0.72, 0.90)
+    : 0.62;
+  return fr('Single', singleConf);
 }
 
 function compositionDistanceScore(x, y, targets, radiusX = 0.16, radiusY = 0.16) {
@@ -7508,7 +7518,11 @@ function estimateLighting(colorAnalysis, composition, faceAnalysis, edgeMap, pix
     clamp((avgBrightness - 0.54) * 4.2, 0, 1) * 1.0 +
     clamp((0.24 - shadowRatio) * 5.2, 0, 1) * 0.8 +
     clamp((0.34 - contrastRatio) * 4.5, 0, 1) * 0.6 +
-    (lightingContrast === 'Low' ? 0.22 : 0);
+    (lightingContrast === 'Low' ? 0.22 : 0) +
+    // Extra bonus for clearly bright frames (disambiguate from borderline Flat)
+    clamp((avgBrightness - 0.62) * 5.0, 0, 1) * 0.20 +
+    // Penalty when frame is borderline bright but has significant modeling asymmetry (-> Rembrandt/Chiaroscuro)
+    (modelingAsym > 0.18 && avgBrightness < 0.64 ? -0.12 : 0);
 
   scores['Low-key'] =
     clamp((0.44 - avgBrightness) * 4.2, 0, 1) * 0.9 +
@@ -7523,27 +7537,41 @@ function estimateLighting(colorAnalysis, composition, faceAnalysis, edgeMap, pix
     clamp((0.30 - contrastRatio) * 5.2, 0, 1) * 1.0 +
     clamp((0.10 - modelingAsym) * 8, 0, 1) * flatModelingWeight +
     clamp((1.8 - keyFillRatio) * 0.8, 0, 1) * 0.55 +
-    (lightingHardness === 'Soft' ? 0.18 : 0);
+    (lightingHardness === 'Soft' ? 0.18 : 0) +
+    // Strong Flat signal: very low contrast (< 0.15) with no backlighting
+    (contrastRatio < 0.15 && !isBacklit ? 0.20 : 0);
 
   scores['Chiaroscuro'] =
     clamp((subjectShadowRatio - 0.22) * 4.2, 0, 1) * 0.8 +
-    clamp((subjectHighlightRatio - 0.08) * 5.5, 0, 1) * 0.7 +
+    // Raised threshold: 0.13 (was 0.08) to better separate from Low-key
+    // Chiaroscuro needs BOTH deep shadows AND bright highlights (high contrast subject)
+    clamp((subjectHighlightRatio - 0.13) * 5.5, 0, 1) * 0.7 +
     clamp((contrastRatio - 0.34) * 4.5, 0, 1) * 1.0 +
     clamp((keyFillRatio - 3.1) * 0.22, 0, 1) * 0.7 +
     (lightingHardness === 'Hard' ? 0.35 : 0);
 
+  // Silhouette fix: isBacklit alone is not enough - subject must actually be dark.
+  // Backlit + bright subject = High-key/Rim, not Silhouette.
+  const subjectIsDark = (subjectStats?.avgBrightness ?? centerBri / 255) < 0.40;
+  const backlitBonus = isBacklit ? (subjectIsDark ? 1.25 : 0.30) : 0;
   scores['Silhouette'] =
-    (isBacklit ? 1.25 : 0) +
+    backlitBonus +
     effRimLightStrength * 0.65 +
     clamp((0.55 - (subjectStats?.avgBrightness ?? centerBri / 255)) * 3.4, 0, 1) * 0.75 +
     clamp((subjectRing?.avgBrightness ?? perimMax / 255) - (subjectStats?.avgBrightness ?? centerBri / 255), 0, 1) * 0.7;
 
-  scores['Rembrandt'] = hasFace
+  // Rembrandt: with face = full scoring; without face = use frame-level asymmetry proxy
+  // (some shots have strongly lit subjects but face detector fails -> gives 0 unfairly)
+  const rembrandtBase = hasFace
     ? clamp((modelingAsym - 0.10) * 5.5, 0, 1) * 0.9 +
       clamp((subjectVertBias - 0.05) * 5, 0, 1) * 0.45 +
       clamp((keyFillRatio - 2.0) * 0.22, 0, 1) * 0.55 +
       clamp((0.72 - (subjectStats?.avgBrightness ?? avgBrightness)) * 1.5, 0, 1) * 0.35
-    : 0;
+    : // No face: use frame-level modeling asymmetry (weaker signal, lower max score)
+      clamp((Math.abs(combinedHorizBias) - 0.14) * 4.5, 0, 1) * 0.45 +
+      clamp((keyFillRatio - 2.5) * 0.20, 0, 1) * 0.40 +
+      clamp((contrastRatio - 0.28) * 3.0, 0, 1) * 0.35;
+  scores['Rembrandt'] = rembrandtBase;
 
   const subtypeScores = {};
   subtypeScores['Split'] = hasFace
@@ -7876,7 +7904,9 @@ async function analyzeFrameAdvanced(scene) {
 
   // === DOF ESTIMATION ===
   const dof = estimateDOF(focusAnalysis, shotSize, faceAnalysis, poseAnalysis, contentMode);
-  const framing = estimateFraming(faceAnalysis, poseAnalysis, composition);
+  const framingResult = estimateFraming(faceAnalysis, poseAnalysis, composition);
+  const framing = framingResult.type;
+  const framingConf = framingResult.confidence;
   
   // ?? ?숈뒿 DB ?곸슜 ??????????????????????????????????????????????????????
   const _features = extractFeatureVector(composition, edgeMap, focusAnalysis, colorAnalysis, motionData);
@@ -7900,6 +7930,7 @@ async function analyzeFrameAdvanced(scene) {
     shotSizeDetail:     shotSize.detail,
     shotSizeMetrics:    shotSize.metrics || null,
     framing:            learnLabel('framing')   || framing,
+    framingConf:        L['framing'] ? clamp(0.72 + (L['framing'].sim - 0.80) * 1.1, 0.72, 0.94) : framingConf,
     lensType:           learnLabel('lensType')  || lens.type,
     lensConf:           learnConf('lensType',    lens.confidence),
     lensDetail:         lens.detail,
@@ -8955,8 +8986,8 @@ async function estimateMotion(scene) {
       return { type: 'Handheld', confidence: 0.63, detail: 'Residual shake stays high without clean directional consistency, which reads as handheld.', direction: dirLabel(avgDx, avgDy), speed, smoothness: Math.max(0, smoothness - 0.2) };
     }
 
-    // Whip-pan
-    if (Math.abs(avgDx) > Math.abs(avgDy) * 1.65 && Math.abs(avgDx) >= 2.8 && dirConX > 0.78) {
+    // Whip-pan: dirConX lowered from 0.78 to 0.72 to catch noisy rapid pans
+    if (Math.abs(avgDx) > Math.abs(avgDy) * 1.65 && Math.abs(avgDx) >= 2.8 && dirConX > 0.72) {
       return { type: 'Whip-pan', confidence: clamp(0.60 + avgGain * 0.65, 0.60, 0.93),
         detail: `A very fast horizontal sweep (avg ${avgDx.toFixed(1)}px) is closer to a whip-pan than a normal pan.`, direction: avgDx > 0 ? 'right' : 'left', speed: 'very-fast', smoothness };
     }
@@ -8995,8 +9026,9 @@ async function estimateMotion(scene) {
     }
 
     // Pan / Trucking (horizontal dominant)
-    // avgAbsScale < 0.012: scale change present => likely zoom, not pan
-    if (Math.abs(avgDx) > Math.abs(avgDy) * 1.40 && Math.abs(avgDx) >= 1.1 && dirConX > 0.58 && avgAbsScale < 0.012) {
+    // avgAbsScale < 0.022: allow slight perspective scale shift (~2%) during pan
+    // (telephoto pans show ~1-2% scale compression; 0.012 was too strict)
+    if (Math.abs(avgDx) > Math.abs(avgDy) * 1.40 && Math.abs(avgDx) >= 1.1 && dirConX > 0.52 && avgAbsScale < 0.022) {
       const dir = avgDx > 0 ? 'right' : 'left';
       if (subjectPresent && subStableXY && avgAbsScale < 0.022 && avgResidual > 0.068) {
         return { type: 'Trucking', confidence: clamp(0.55 + avgGain * 0.65, 0.55, 0.84),
@@ -9007,8 +9039,8 @@ async function estimateMotion(scene) {
     }
 
     // Tilt / Pedestal (vertical dominant)
-    // avgAbsScale < 0.012: scale change present => likely push-in/crane, not tilt
-    if (Math.abs(avgDy) > Math.abs(avgDx) * 1.40 && Math.abs(avgDy) >= 0.9 && dirConY > 0.58 && avgAbsScale < 0.012) {
+    // avgAbsScale < 0.022: allow slight perspective scale shift during tilt
+    if (Math.abs(avgDy) > Math.abs(avgDx) * 1.40 && Math.abs(avgDy) >= 0.9 && dirConY > 0.52 && avgAbsScale < 0.022) {
       const dir = avgDy > 0 ? 'down' : 'up';
       if (subjectPresent && subStableXY && avgAbsScale < 0.022 && avgResidual > 0.068) {
         return { type: 'Pedestal', confidence: clamp(0.53 + avgGain * 0.65, 0.53, 0.83),
@@ -9036,8 +9068,15 @@ async function estimateMotion(scene) {
         detail: 'The move is smooth and mobile without a single dominant axis, which fits steadicam or gimbal movement.', direction: dirLabel(avgDx, avgDy), speed, smoothness };
     }
 
-    // Fallback handheld
-    return { type: 'Handheld', confidence: 0.43, detail: 'Motion remains unstable without a cleaner classification, so it falls back to handheld.', direction: dirLabel(avgDx, avgDy), speed, smoothness: Math.max(0, smoothness - 0.15) };
+    // Pre-fallback: micro-motion that never passed any threshold = probably Static noise
+    if (avgMagnitude < 0.35 && avgGain < 0.04) {
+      return { type: 'Static', confidence: 0.52,
+        detail: 'Very low motion magnitude with minimal gain - likely camera noise on a locked-off shot.',
+        direction: null, speed: 'none', smoothness: 1.0 };
+    }
+    // Fallback handheld: confidence based on residual (more chaotic = more confidently Handheld)
+    const handheldConf = clamp(0.43 + (avgResidual - 0.07) * 1.2, 0.43, 0.62);
+    return { type: 'Handheld', confidence: handheldConf, detail: 'Motion remains unstable without a cleaner classification, so it falls back to handheld.', direction: dirLabel(avgDx, avgDy), speed, smoothness: Math.max(0, smoothness - 0.15) };
 
   } catch (err) {
     return { type: 'Static', confidence: 0.35, detail: 'Motion analysis failed, so the result falls back to Static.', direction: null, speed: 'none', smoothness: 1.0 };
@@ -9455,8 +9494,8 @@ function estimateDOF(focus, shotSize, faceAnalysis, poseAnalysis, contentMode) {
     if (!explicitBlurRendered) {
       // No deliberate DOF rendering detected -> default to Normal
       return {
-        type: 'Normal', confidence: 0.55,
-        detail: 'Animation frame without explicit depth blur rendering - defaulting to Normal DOF.',
+        type: 'Moderate', confidence: 0.54,
+        detail: 'Animation frame without explicit depth blur rendering - DOF not applicable (cel animation).',
         focusPlane: 'pan-focus', separation: 0
       };
     }
@@ -9546,20 +9585,24 @@ function estimateDOF(focus, shotSize, faceAnalysis, poseAnalysis, contentMode) {
   // ?? 7. Deep focus ?????????????????????????????????????????????????????????
   // Uniform sharpness, high overall detail, wide or landscape shot
   // Animation: uniform sharpness means NO DOF, not Deep focus (optical lens effect)
-  if (sharpnessRatio < 1.14 && overallSharpness > 8.0 && !isAnimDOF) {
-    const conf = clamp(0.64 + (overallSharpness - 8.0) * 0.025, 0.64, 0.84);
+  // Wide shots: lower sharpnessRatio threshold (LS/ELS naturally have Deep focus)
+  const deepRatioThresh = isWide ? 1.20 : 1.14;  // Wide shots can still have slight ratio
+  const deepSharpThresh = isWide ? 6.5 : 8.0;    // Wide shots don't need as high overall sharpness
+  if (sharpnessRatio < deepRatioThresh && overallSharpness > deepSharpThresh && !isAnimDOF) {
+    const baseConf = isWide ? 0.68 : 0.64;
+    const conf = clamp(baseConf + (overallSharpness - deepSharpThresh) * 0.025, baseConf, 0.86);
     return {
       type: 'Deep', confidence: conf,
-      detail: `Sharpness stays broadly even across the frame (overall ${Math.round(overallSharpness * 10) / 10}), which fits deep focus.`,
+      detail: `Sharpness stays broadly even across the frame (overall ${Math.round(overallSharpness * 10) / 10}), which fits deep focus${isWide ? ' - expected for wide-angle shots' : ''}.`,
       focusPlane: 'pan-focus', separation: 0
     };
   }
 
   // ?? 8. Soft overall (low detail but not uniform) ???????????????????????????
-  if (overallSharpness < 5.0 && sharpnessRatio < 1.35) {
+  if (overallSharpness < 5.0 && sharpnessRatio < 1.35 && !isAnimDOF) {
     return {
-      type: 'Soft-focus', confidence: 0.54,
-      detail: 'Overall detail is low across the frame, which reads closer to a soft-focus look.',
+      type: 'Soft-focus', confidence: clamp(0.54 + (5.0 - overallSharpness) * 0.04, 0.54, 0.70),
+      detail: `Overall detail is low (${overallSharpness.toFixed(1)}) with even distribution, suggesting soft-focus treatment.`,
       focusPlane: 'pan-focus', separation: 0
     };
   }
@@ -9574,14 +9617,16 @@ function estimateDOF(focus, shotSize, faceAnalysis, poseAnalysis, contentMode) {
     };
   }
 
-  // Default
+  // Default fallback: wide shots lean Deep, others lean Moderate
+  const fallbackType = (isWide || overallSharpness > 7) ? 'Deep' : 'Moderate';
+  const fallbackConf = isWide ? 0.56 : 0.50;
   return {
-    type: overallSharpness > 7 ? 'Deep' : 'Moderate',
-    confidence: 0.50,
-    detail: overallSharpness > 7
-      ? 'Overall sharpness stays fairly even, so the fallback leans toward deep focus.'
+    type: fallbackType,
+    confidence: fallbackConf,
+    detail: fallbackType === 'Deep'
+      ? `Overall sharpness is even${isWide ? ' (wide shot default)' : ''}, suggesting deep focus.`
       : 'Depth cues are mixed, so the fallback stays at moderate depth of field.',
-    focusPlane: overallSharpness > 7 ? 'pan-focus' : focusPlane,
+    focusPlane: fallbackType === 'Deep' ? 'pan-focus' : focusPlane,
     separation
   };
 }
