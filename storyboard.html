@@ -8600,14 +8600,19 @@ function estimateShotSize(composition, edgeMap, w, h, focus, faceAnalysis, poseA
       }
     }
 
+    // Boundary uncertainty: reduce confidence when near a classification threshold
+    const BOUNDARIES = [0.72, 0.55, 0.38, 0.22];
+    const nearBoundary = BOUNDARIES.some(b => Math.abs(adjustedFaceH - b) < 0.025);
+    const boundaryPenalty = nearBoundary ? -0.06 : 0;
     const conf = clamp(
       0.56
         + Math.min(pose.confidence * 0.22, 0.2)
         + Math.min(Math.max(subjectHeight - 0.15, 0) * 0.18, 0.12)
         + (faceAnalysis?.count > 0 ? 0.04 : 0)
         + (pose.hasMask ? 0.04 : 0)
-        + crossConf,
-      0.56, 0.96
+        + crossConf
+        + boundaryPenalty,
+      0.50, 0.96
     );
 
     return {
@@ -8625,7 +8630,13 @@ function estimateShotSize(composition, edgeMap, w, h, focus, faceAnalysis, poseA
 
   if (faceAnalysis?.count > 0) {
     const faceArea = faceAnalysis.largestAreaRatio;
-    const faceHeight = faceAnalysis.maxHeightRatio;
+    const rawFaceHeight = faceAnalysis.maxHeightRatio;
+    // Animation proportion correction (face-only path): cel animation characters have
+    // disproportionately large heads - correct before threshold comparison
+    const faceAnimFactor = (contentMode?.isAnimation && contentMode.isCelAnim && contentMode.confidence > 0.40)
+      ? clamp(1.0 + (contentMode.confidence - 0.40) * 2.2, 1.0, 1.8)
+      : 1.0;
+    const faceHeight = faceAnimFactor > 1.0 ? rawFaceHeight / faceAnimFactor : rawFaceHeight;
     let type = 'MS';
 
     if (faceHeight > 0.8 || faceArea > 0.5) type = 'ECU';
@@ -8639,10 +8650,15 @@ function estimateShotSize(composition, edgeMap, w, h, focus, faceAnalysis, poseA
     else if (faceHeight > 0.03 || faceArea > 0.004) type = 'LS';
     else type = 'ELS';
 
+    // Boundary uncertainty: confidence penalty when near classification threshold
+    const FACE_BOUNDS = [0.8, 0.6, 0.4, 0.26, 0.17, 0.11, 0.075, 0.05, 0.03];
+    const nearFaceBound = FACE_BOUNDS.some(b => Math.abs(faceHeight - b) < 0.025);
+    const faceBoundPenalty = nearFaceBound ? -0.05 : 0;
+
     return {
       type,
-      confidence: clamp(faceAnalysis.confidence + 0.04, 0.62, 0.94),
-      detail: `얼굴 높이 ${Math.round(faceHeight * 100)}%, 면적 ${Math.round(faceArea * 100)}%로 ${type} 구도에 가깝습니다.`
+      confidence: clamp(faceAnalysis.confidence + 0.04 + faceBoundPenalty, 0.58, 0.94),
+      detail: `얼굴 높이 ${Math.round(rawFaceHeight * 100)}%(보정 ${Math.round(faceHeight * 100)}%), 면적 ${Math.round(faceArea * 100)}%로 ${type} 구도에 가깝습니다.`
     };
   }
 
@@ -9407,14 +9423,17 @@ function estimateAngle(composition, color, w, h, faceAnalysis, poseAnalysis, edg
       clamp(1 - Math.abs(subjectY - 0.50) / 0.17, 0, 1) * 0.40 +
       clamp(1 - Math.abs(effVertBias) / 0.15, 0, 1) * 0.28 +
       clamp(1 - Math.abs(centroidY - 0.50) / 0.16, 0, 1) * 0.18 +
-      (Math.abs(rowTop - rowBot) < 0.08 ? 0.14 : 0);
+      (Math.abs(rowTop - rowBot) < 0.08 ? 0.14 : 0) +
+      // Wide/establishing shots are almost always eye-level in narrative filmmaking
+      (['LS', 'ELS', 'FS', 'MLS', 'Establishing'].includes(shotType) ? 0.12 : 0);
 
     // SHOULDER-LEVEL: slightly below eye, ~5-15째 downward, common dialogue/interview
     //   ??subject in upper-center, MCU/CU shots, minimal vertical bias
     const shoulderScore =
-      clamp(1 - Math.abs(subjectY - 0.56) / 0.14, 0, 1) * 0.40 +
+      clamp(1 - Math.abs(subjectY - 0.57) / 0.14, 0, 1) * 0.40 +
       clamp(1 - Math.abs(effVertBias - 0.04) / 0.12, 0, 1) * 0.22 +
-      (['MCU', 'CU', 'BCU', 'MS', 'Cowboy'].includes(shotType) ? 0.24 : 0) +
+      // MCU/CU bonus only when subject is at/below center (camera slightly lower = looking up)
+      (['MCU', 'CU', 'BCU', 'MS', 'Cowboy'].includes(shotType) && subjectY >= 0.46 ? 0.24 : 0) +
       (faceH > 0.12 && faceH < 0.40 ? 0.14 : 0);
 
     // Pick winner ??require a minimum confidence threshold
