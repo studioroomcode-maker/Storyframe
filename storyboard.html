@@ -2853,6 +2853,7 @@ select.setting-input {
             <button class="btn" onclick="createBenchmarkFromCurrent()">현재 결과로 초안 만들기</button>
             <button class="btn" onclick="triggerBenchmarkImport()">JSON 불러오기</button>
             <button class="btn" onclick="exportBenchmark()" id="benchmarkExportBtn" disabled>JSON 저장</button>
+            <button class="btn" onclick="exportBenchmarkProject()" id="benchmarkProjectExportBtn" disabled title="scenes_json + benchmark_json 묶음 저장">평가용 프로젝트 저장</button>
             <button class="btn" onclick="learnOnly()" id="benchmarkLearnBtn" disabled style="border-color:rgba(196,240,77,0.4);color:#c4f04d;">✨ 학습시키기</button>
             <button class="btn btn-primary" onclick="compareCurrentToBenchmark()" id="benchmarkCompareBtn" disabled>현재 감지와 비교</button>
             <button class="btn" onclick="clearLearningDB()" style="border-color:rgba(255,80,80,0.4);color:#ff8080;" title="모든 학습 데이터를 삭제합니다">학습 DB 초기화</button>
@@ -4505,6 +4506,51 @@ function exportBenchmark() {
   showToast(msg);
 }
 
+function exportBenchmarkProject() {
+  if (!scenes.length) {
+    showToast('내보낼 감지 장면이 없습니다.');
+    return;
+  }
+
+  const now = new Date().toISOString();
+  const baseName = (videoFile?.name || benchmarkData?.video?.name || 'storyframe')
+    .replace(/\.[^.]+$/, '')
+    .replace(/[^\w.-]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    || 'storyframe';
+  const benchmarkSnapshot = benchmarkData
+    ? {
+        ...benchmarkData,
+        updatedAt: now
+      }
+    : null;
+  const payload = {
+    version: 1,
+    exportType: 'storyframe-benchmark-project',
+    exportedAt: now,
+    video: {
+      name: videoFile?.name || benchmarkData?.video?.name || '',
+      duration: videoDuration || benchmarkData?.video?.duration || 0
+    },
+    media_type: currentMediaType || 'video',
+    scene_count: scenes.length,
+    scenes_json: scenes.map(_compressSceneForCloud),
+    benchmark_json: benchmarkSnapshot
+  };
+
+  downloadBlob(
+    JSON.stringify(payload, null, 2),
+    `${baseName}_storyframe_project.json`,
+    'application/json'
+  );
+
+  if (benchmarkSnapshot?.scenes?.length) {
+    showToast('평가용 프로젝트 JSON 저장 완료');
+  } else {
+    showToast('프로젝트 JSON 저장 완료 · 벤치마크는 아직 비어 있습니다');
+  }
+}
+
 function deleteBenchmarkScene(index) {
   if (!benchmarkData?.scenes?.[index]) return;
   benchmarkData.scenes.splice(index, 1);
@@ -4974,6 +5020,7 @@ function renderBenchmarkSection() {
   const metaEl = document.getElementById('benchmarkMeta');
   const compareBtn = document.getElementById('benchmarkCompareBtn');
   const exportBtn = document.getElementById('benchmarkExportBtn');
+  const projectExportBtn = document.getElementById('benchmarkProjectExportBtn');
   const learnBtn = document.getElementById('benchmarkLearnBtn');
   const headerBtn = document.getElementById('headerBenchmarkBtn');
 
@@ -4982,6 +5029,7 @@ function renderBenchmarkSection() {
   headerBtn.style.display = visible ? 'inline-flex' : 'none';
   compareBtn.disabled = !benchmarkData?.scenes?.length || !scenes.length;
   exportBtn.disabled = !benchmarkData?.scenes?.length;
+  if (projectExportBtn) projectExportBtn.disabled = !scenes.length;
   if (learnBtn) learnBtn.disabled = !benchmarkData?.scenes?.length || !scenes.length;
   renderBenchmarkTableHead();
   renderBenchmarkSummary();
@@ -6325,9 +6373,14 @@ function estimateFraming(faceAnalysis, poseAnalysis, composition) {
       && box.cx < 0.72
     );
     if (edgeFace && centerFace) {
-      // Confidence based on how distinct the edge/center separation is
+      // Confidence based on spatial separation + size ratio
       const separation = Math.abs(edgeFace.cx - centerFace.cx);
-      return fr('OTS', clamp(0.64 + separation * 0.6, 0.64, 0.84));
+      // OTS: edge (background) face should be notably smaller than center (foreground) face
+      const sizeRatio = edgeFace.height / Math.max(centerFace.height, 0.01);
+      const sizeSignal = sizeRatio < 0.75
+        ? clamp((0.75 - sizeRatio) / 0.35, 0, 0.10)   // bonus: clear foreground/background size gap
+        : -0.06;                                        // penalty: similar size = probably Two-shot
+      return fr('OTS', clamp(0.64 + separation * 0.6 + sizeSignal, 0.60, 0.84));
     }
 
     const poses = poseAnalysis?.poses || [];
@@ -8578,16 +8631,19 @@ function estimateShotSize(composition, edgeMap, w, h, focus, faceAnalysis, poseA
     if (faceAnalysis?.count > 0 && !isGroupShot) {
       const fh2 = faceAnalysis.maxHeightRatio;
       const fa2 = faceAnalysis.largestAreaRatio;
+      // Apply same animation correction for consistent cross-validation
+      const adjFh2 = proportionFactor > 1.0 ? fh2 / proportionFactor : fh2;
       let fType = 'MS';
-      if (fh2 > 0.8 || fa2 > 0.5) fType = 'ECU';
-      else if (fh2 > 0.6 || fa2 > 0.3) fType = 'BCU';
-      else if (fh2 > 0.4 || fa2 > 0.17) fType = 'CU';
-      else if (fh2 > 0.26 || fa2 > 0.095) fType = 'MCU';
-      else if (fh2 > 0.17 || fa2 > 0.055) fType = 'MS';
-      else if (fh2 > 0.11 || fa2 > 0.028) fType = 'Cowboy';
-      else if (fh2 > 0.075 || fa2 > 0.016) fType = 'MLS';
-      else if (fh2 > 0.05 || fa2 > 0.008) fType = 'FS';
-      else if (fh2 > 0.03 || fa2 > 0.004) fType = 'LS';
+      // Aligned thresholds matching pose path adjustedFaceH scale
+      if (adjFh2 >= 0.72 || fa2 > 0.5) fType = 'ECU';
+      else if (adjFh2 >= 0.55 || fa2 > 0.3) fType = 'BCU';
+      else if (adjFh2 >= 0.38 || fa2 > 0.17) fType = 'CU';
+      else if (adjFh2 >= 0.22 || fa2 > 0.095) fType = 'MCU';
+      else if (adjFh2 >= 0.15 || fa2 > 0.055) fType = 'MS';
+      else if (adjFh2 >= 0.10 || fa2 > 0.028) fType = 'Cowboy';
+      else if (adjFh2 >= 0.07 || fa2 > 0.016) fType = 'MLS';
+      else if (adjFh2 >= 0.045 || fa2 > 0.008) fType = 'FS';
+      else if (adjFh2 >= 0.025 || fa2 > 0.004) fType = 'LS';
       else fType = 'ELS';
 
       if (fType === type) {
@@ -8639,19 +8695,20 @@ function estimateShotSize(composition, edgeMap, w, h, focus, faceAnalysis, poseA
     const faceHeight = faceAnimFactor > 1.0 ? rawFaceHeight / faceAnimFactor : rawFaceHeight;
     let type = 'MS';
 
-    if (faceHeight > 0.8 || faceArea > 0.5) type = 'ECU';
-    else if (faceHeight > 0.6 || faceArea > 0.3) type = 'BCU';
-    else if (faceHeight > 0.4 || faceArea > 0.17) type = 'CU';
-    else if (faceHeight > 0.26 || faceArea > 0.095) type = 'MCU';
-    else if (faceHeight > 0.17 || faceArea > 0.055) type = 'MS';
-    else if (faceHeight > 0.11 || faceArea > 0.028) type = 'Cowboy';
-    else if (faceHeight > 0.075 || faceArea > 0.016) type = 'MLS';
-    else if (faceHeight > 0.05 || faceArea > 0.008) type = 'FS';
-    else if (faceHeight > 0.03 || faceArea > 0.004) type = 'LS';
+    // Thresholds aligned to pose path adjustedFaceH scale (prevents jump on path switch)
+    if (faceHeight >= 0.72 || faceArea > 0.5) type = 'ECU';
+    else if (faceHeight >= 0.55 || faceArea > 0.3) type = 'BCU';
+    else if (faceHeight >= 0.38 || faceArea > 0.17) type = 'CU';
+    else if (faceHeight >= 0.22 || faceArea > 0.095) type = 'MCU';
+    else if (faceHeight >= 0.15 || faceArea > 0.055) type = 'MS';
+    else if (faceHeight >= 0.10 || faceArea > 0.028) type = 'Cowboy';
+    else if (faceHeight >= 0.07 || faceArea > 0.016) type = 'MLS';
+    else if (faceHeight >= 0.045 || faceArea > 0.008) type = 'FS';
+    else if (faceHeight >= 0.025 || faceArea > 0.004) type = 'LS';
     else type = 'ELS';
 
     // Boundary uncertainty: confidence penalty when near classification threshold
-    const FACE_BOUNDS = [0.8, 0.6, 0.4, 0.26, 0.17, 0.11, 0.075, 0.05, 0.03];
+    const FACE_BOUNDS = [0.72, 0.55, 0.38, 0.22, 0.15, 0.10, 0.07, 0.045, 0.025];
     const nearFaceBound = FACE_BOUNDS.some(b => Math.abs(faceHeight - b) < 0.025);
     const faceBoundPenalty = nearFaceBound ? -0.05 : 0;
 
@@ -8983,14 +9040,17 @@ async function estimateMotion(scene) {
     }
 
     // Zoom (optical: pure scale, minimal translation, low residual)
-    if (avgAbsScale > 0.028 && dirConSc > 0.60 && avgScaleGain > 0.07 && avgMagnitude < 1.3 && avgResidual < 0.09) {
+    // Relaxed magnitude 1.3->1.8: handheld zoom has slight translation noise
+    if (avgAbsScale > 0.028 && dirConSc > 0.60 && avgScaleGain > 0.07 && avgMagnitude < 1.8 && avgResidual < 0.10) {
       const inward = avgScaleDelta > 0;
       return { type: inward ? 'Zoom-in' : 'Zoom-out', confidence: clamp(0.58 + avgScaleGain * 0.85, 0.58, 0.91),
         detail: `Optical scale changes by ${(avgAbsScale * 100).toFixed(1)}% with limited translation, which fits a ${inward ? 'zoom-in' : 'zoom-out'}.`, direction: inward ? 'in' : 'out', speed, smoothness };
     }
 
-    // Push-in / Pull-out (scale + translation combined)
-    if (avgAbsScale > 0.024 && dirConSc > 0.55 && avgScaleGain > 0.055) {
+    // Push-in / Pull-out (scale + translation combined; requires meaningful translation)
+    // avgMagnitude > 0.55: must have real translation (not just scale noise)
+    // OR avgAbsScale > 0.040: very large scale alone also qualifies
+    if (avgAbsScale > 0.024 && dirConSc > 0.55 && avgScaleGain > 0.055 && (avgMagnitude > 0.55 || avgAbsScale > 0.040)) {
       const inward = avgScaleDelta > 0;
       return { type: inward ? 'Push-in' : 'Pull-out', confidence: clamp(0.55 + avgScaleGain * 0.75, 0.55, 0.86),
         detail: `Scale change (${(avgAbsScale * 100).toFixed(1)}%) combines with translation, which fits a ${inward ? 'push-in' : 'pull-out'}.`, direction: inward ? 'in' : 'out', speed, smoothness };
@@ -9119,6 +9179,12 @@ function estimateLens(focus, edgeMap, w, h, color, shotSize, faceAnalysis, poseA
   // High -> telephoto (compressed background retains detail)
   // Low  -> wide lens or shallow DOF (corners blurry / less detailed)
   const perspRatio       = focus.perspRatio ?? 0.5;
+  // perspTeleSignal: perspRatio only reliably indicates telephoto when DOF is shallow
+  // With deep DOF (sharpnessRatio < 1.4), a wide-angle stopped-down also has high perspRatio
+  // -> cap the telephoto interpretation when evidence of deep/uniform focus
+  const perspTeleSignal  = sharpnessRatio > 1.40
+    ? perspRatio
+    : Math.min(perspRatio, 0.42);  // cap at neutral when deep DOF
 
   // Subject at frame edge ??wide-angle perspective distortion / stretch
   const edgeDistortion = (
@@ -9196,7 +9262,8 @@ function estimateLens(focus, edgeMap, w, h, color, shotSize, faceAnalysis, poseA
     clamp((bgCompression - 1.8) / 1.2, 0, 1) * 0.28 +
     (isECU_BCU ? 0.18 : 0) +
     (faceH > 0.38 ? clamp((faceH - 0.38) / 0.28, 0, 1) * 0.13 : 0) +
-    clamp((perspRatio - 0.40) / 0.35, 0, 1) * 0.09;  // corner detail retention
+    clamp((perspTeleSignal - 0.40) / 0.35, 0, 1) * 0.09 +  // corner detail (DOF-gated)
+    (vignetting > 1.20 ? clamp((vignetting - 1.20) / 0.30, 0, 1) * 0.06 : 0);  // lens vignetting
   if (stScore > 0.45 || (isECU_BCU && sharpnessRatio > 2.2 && faceH > 0.36)) {
     return {
       type: 'Super-telephoto(>135mm)', confidence: clamp(0.60 + stScore * 0.28, 0.60, 0.88),
@@ -9215,7 +9282,8 @@ function estimateLens(focus, edgeMap, w, h, color, shotSize, faceAnalysis, poseA
     ((isCU_up || isMid) ? 0.14 : 0) +
     (faceH > 0.14 ? clamp((faceH - 0.14) / 0.28, 0, 1) * 0.12 : 0) +
     (hvConc > 0.46 ? clamp((hvConc - 0.46) / 0.20, 0, 1) * 0.08 : 0) +
-    clamp((perspRatio - 0.30) / 0.40, 0, 1) * 0.05;  // perspective compression
+    clamp((perspTeleSignal - 0.30) / 0.40, 0, 1) * 0.05 +  // perspective compression (DOF-gated)
+    (vignetting > 1.15 ? clamp((vignetting - 1.15) / 0.35, 0, 1) * 0.08 : 0);  // telephoto vignetting
   if (teleScore > 0.32 || (isCU_up && sharpnessRatio > 1.60 && faceH > 0.16)) {
     return {
       type: 'Telephoto(60-135mm)', confidence: clamp(0.55 + teleScore * 0.33, 0.55, 0.88),
@@ -9237,7 +9305,8 @@ function estimateLens(focus, edgeMap, w, h, color, shotSize, faceAnalysis, poseA
     (isWide ? 0.10 : 0) +
     (hvConc < 0.46 ? clamp((0.46 - hvConc) / 0.15, 0, 1) * 0.04 : 0) +
     clamp((0.30 - perspRatio) / 0.20, 0, 1) * 0.06 -  // wide: corners lack detail
-    clamp((perspRatio - 0.55) / 0.20, 0, 1) * 0.08;   // penalize if corners retain detail (tele)
+    // Penalize high perspRatio only with shallow DOF: deep DOF wide-angle also has even sharpness
+    (sharpnessRatio > 1.40 ? clamp((perspRatio - 0.55) / 0.20, 0, 1) * 0.08 : 0);
   if (wideScore > 0.30 || edgeDistortion) {
     return {
       type: 'Wide(16-35mm)', confidence: clamp(0.52 + wideScore * 0.30, 0.52, 0.82),
