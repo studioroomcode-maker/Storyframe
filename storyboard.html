@@ -3527,6 +3527,7 @@ async function callAI(systemPrompt, parts, maxTokens) {
     body: JSON.stringify({
       model: 'claude-sonnet-4-5',
       max_tokens: maxTokens,
+      temperature: 0.3,
       system: systemPrompt || undefined,
       messages: [{ role: 'user', content: parts }]
     })
@@ -7787,7 +7788,7 @@ async function analyzeFrameAdvanced(scene) {
   const movement = motionData;
 
   // === ANGLE ESTIMATION ===
-  const angle = estimateAngle(composition, colorAnalysis, w, h, faceAnalysis, poseAnalysis, edgeMap, shotSize);
+  const angle = estimateAngle(composition, colorAnalysis, w, h, faceAnalysis, poseAnalysis, edgeMap, shotSize, contentMode);
 
   // === DOF ESTIMATION ===
   const dof = estimateDOF(focusAnalysis, shotSize, faceAnalysis, poseAnalysis);
@@ -8312,7 +8313,7 @@ function detectContentMode(pixels, w, h, edgeMap) {
     const r = pixels[i * 4], g = pixels[i * 4 + 1], b = pixels[i * 4 + 2];
     const maxC = Math.max(r, g, b), minC = Math.min(r, g, b);
     const s = maxC > 0 ? (maxC - minC) / maxC : 0;
-    if (s > 0.08) {
+    if (s > 0.02) {
       satHist[Math.min(Math.floor(s * SAT_BINS), SAT_BINS - 1)]++;
       satCount++;
     }
@@ -8367,7 +8368,7 @@ function estimateShotSize(composition, edgeMap, w, h, focus, faceAnalysis, poseA
     // Animated characters often have larger heads relative to body (anime ~1/3, realistic ~1/7.5)
     // This causes face-height thresholds to classify shots 1-2 categories too tight.
     let proportionFactor = 1.0;
-    if (contentMode && contentMode.isAnimation && contentMode.confidence > 0.25 && subjectHeight > 0.05) {
+    if (contentMode && contentMode.isAnimation && contentMode.confidence > 0.40 && subjectHeight > 0.05) {
       const measuredHeadBodyRatio = (pose.faceHeightRatio || 0) / subjectHeight;
       if (measuredHeadBodyRatio > 0.20) {
         // Realistic head-body ratio ~0.145; anime/cartoon ~0.22-0.40
@@ -8710,9 +8711,11 @@ async function estimateMotion(scene) {
     //                         1 = flow independent of subject = real camera move
     let subjectMotionAlignment = 1.0;
     if (subjectPresent && (Math.abs(subDX) > 0.06 || Math.abs(subDY) > 0.06)) {
-      // Convert normalized subject delta to coarse-pixel units
-      const subDxPx = subDX * COARSE_W;
-      const subDyPx = subDY * COARSE_W;
+      // Convert normalized subject delta to FINE-frame pixel units
+      // avgDx/avgDy are in FINE (128px) coordinates, so scale by FINE_W
+      // (Bug fix: was using COARSE_W=64, causing 2x scale mismatch)
+      const subDxPx = subDX * FINE_W;
+      const subDyPx = subDY * FINE_W;
       const alignX = Math.abs(avgDx) > 0.3
         ? Math.abs(avgDx - subDxPx) / (Math.abs(avgDx) + 0.01)
         : 1.0;
@@ -8863,7 +8866,7 @@ async function estimateMotion(scene) {
   }
 }
 
-function estimateLens(focus, edgeMap, w, h, color, shotSize, faceAnalysis, poseAnalysis) {
+function estimateLens(focus, edgeMap, w, h, color, shotSize, faceAnalysis, poseAnalysis, contentMode = null) {
   const sharpnessRatio   = focus.sharpnessRatio   ?? 1;
   const overallSharpness = focus.overallSharpness  ?? 5;
   // New rich fields from updated analyzeFocusRegions
@@ -8902,6 +8905,23 @@ function estimateLens(focus, edgeMap, w, h, color, shotSize, faceAnalysis, poseA
   const isCU_up   = ['CU', 'BCU', 'ECU'].includes(shotType);
   const isMid     = ['MCU', 'MS', 'Cowboy', 'MLS'].includes(shotType);
   const isWide    = ['LS', 'ELS', 'Establishing'].includes(shotType);
+
+  // Animation lens guard:
+  // Real lens physics (bokeh, optical compression, barrel distortion) don't apply to animation.
+  // Only apply optical analysis when: content is live-action, OR animator explicitly rendered DOF.
+  if (contentMode && contentMode.isAnimation && contentMode.confidence > 0.40) {
+    // Check for deliberately rendered radial DOF (all three signals must be elevated)
+    const deliberateDOF = sharpnessRatio > 1.8 && radialFalloff > 1.6 && bgCompression > 1.6;
+    if (!deliberateDOF) {
+      return {
+        type: 'Normal(35-60mm)',
+        confidence: clamp(0.35 + contentMode.confidence * 0.15, 0.35, 0.50),
+        detail: `Animation: lens type not reliably determinable without rendered DOF artifacts (anim=${contentMode.score.toFixed(2)}). Defaulting to Normal.`,
+        focalRange: 'unknown'
+      };
+    }
+    // Deliberate DOF detected: continue with standard scoring, confidence capped later
+  }
 
   // ?? Macro ?????????????????????????????????????????????????????????????????
   // INSERT-level framing of tiny subject, extremely thin focal plane
@@ -8995,8 +9015,11 @@ function estimateLens(focus, edgeMap, w, h, color, shotSize, faceAnalysis, poseA
     + clamp(1 - Math.abs(diagER - 0.20) / 0.12, 0, 1) * 0.08,
     0.46, 0.74
   );
+  // Cap confidence for animation content (deliberate DOF path)
+  const animConfCap = (contentMode && contentMode.isAnimation && contentMode.confidence > 0.40) ? 0.68 : 1.0;
+
   return {
-    type: 'Normal(35-60mm)', confidence: normalConf,
+    type: 'Normal(35-60mm)', confidence: Math.min(normalConf, animConfCap),
     detail: isMid
       ? `${shotType} framing with balanced perspective and moderate depth cues fits a normal lens.`
       : 'Wide and telephoto cues are mixed, so the fallback stays in the normal lens range.',
@@ -9004,7 +9027,13 @@ function estimateLens(focus, edgeMap, w, h, color, shotSize, faceAnalysis, poseA
   };
 }
 
-function estimateAngle(composition, color, w, h, faceAnalysis, poseAnalysis, edgeMap, shotSize) {
+function estimateAngle(composition, color, w, h, faceAnalysis, poseAnalysis, edgeMap, shotSize, contentMode = null) {
+  // Animation confidence cap: brightness/proportion heuristics are unreliable for drawn media.
+  // Dutch angle is exempt (frame tilt is always intentional, even in animation).
+  const animConfCap = (v) =>
+    (contentMode && contentMode.isAnimation && contentMode.confidence > 0.40)
+      ? Math.min(v, 0.70)
+      : v;
   const shotType = shotSize?.type || shotSize || '';
   const subject  = getPrimarySubject(faceAnalysis, poseAnalysis);
   const pose     = poseAnalysis?.primary || null;
@@ -9073,7 +9102,7 @@ function estimateAngle(composition, color, w, h, faceAnalysis, poseAnalysis, edg
     && Math.abs(vertBias) < 0.12
   ) {
     return {
-      type: "Bird's-eye", confidence: 0.66,
+      type: "Bird's-eye", confidence: animConfCap(0.66),
       detail: 'Flat top-down geometry with minimal subject prominence suggests a bird-eye view.', tilt: 90
     };
   }
@@ -9086,7 +9115,7 @@ function estimateAngle(composition, color, w, h, faceAnalysis, poseAnalysis, edg
     && composition.bottomHeavy
   ) {
     return {
-      type: 'Aerial', confidence: clamp(0.54 + Math.abs(vertBias) * 0.35, 0.54, 0.74),
+      type: 'Aerial', confidence: animConfCap(clamp(0.54 + Math.abs(vertBias) * 0.35, 0.54, 0.74)),
       detail: 'A steep downward view over space and layout suggests an aerial angle.', tilt: 65
     };
   }
@@ -9163,7 +9192,7 @@ function estimateAngle(composition, color, w, h, faceAnalysis, poseAnalysis, edg
       };
       return {
         type: bestType,
-        confidence: clamp(0.48 + bestScore * 0.52, 0.48, 0.88),
+        confidence: animConfCap(clamp(0.48 + bestScore * 0.52, 0.48, 0.88)),
         detail: details[bestType],
         tilt: tilts[bestType]
       };
@@ -9173,13 +9202,13 @@ function estimateAngle(composition, color, w, h, faceAnalysis, poseAnalysis, edg
   // ?? 8. Subject-absent fallbacks ????????????????????????????????????????
   if (!subject) {
     if (composition.centerWeight < 0.16 && composition.bottomHeavy && vertBias < -0.14) {
-      return { type: 'Overhead', confidence: 0.50, detail: 'A centered top-down layout with little subject prominence suggests an overhead angle.', tilt: 60 };
+      return { type: 'Overhead', confidence: animConfCap(0.50), detail: 'A centered top-down layout with little subject prominence suggests an overhead angle.', tilt: 60 };
     }
     if (skyLikely && vertBias > 0.14) {
-      return { type: 'Low', confidence: 0.48, detail: 'An open upper frame and upward bias suggest a low angle.', tilt: -20 };
+      return { type: 'Low', confidence: animConfCap(0.48), detail: 'An open upper frame and upward bias suggest a low angle.', tilt: -20 };
     }
     if (vertBias < -0.20 && composition.bottomHeavy) {
-      return { type: 'High', confidence: 0.47, detail: 'Downward framing without a dominant subject suggests a high angle.', tilt: 28 };
+      return { type: 'High', confidence: animConfCap(0.47), detail: 'Downward framing without a dominant subject suggests a high angle.', tilt: 28 };
     }
   }
 
