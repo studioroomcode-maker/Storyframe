@@ -7364,7 +7364,7 @@ async function getSceneLocalCamera(scene) {
   return scene.localCameraAnalysis;
 }
 
-function estimateLighting(colorAnalysis, composition, faceAnalysis, edgeMap, pixels, w, h, poseAnalysis) {
+function estimateLighting(colorAnalysis, composition, faceAnalysis, edgeMap, pixels, w, h, poseAnalysis, contentMode) {
   const {
     avgBrightness, shadowRatio, highlightRatio, warmRatio, coolRatio, contrastRatio,
     avgR = 128, avgG = 128, avgB = 128, avgSaturation = 0.2, lumaStd = 0.1,
@@ -7423,6 +7423,17 @@ function estimateLighting(colorAnalysis, composition, faceAnalysis, edgeMap, pix
     : clamp(((perimMax - centerBri) / 95) + highlightRatio * 1.2, 0, 1);
   const subjectShadowRatio = subjectStats?.shadowRatio ?? shadowRatio;
   const subjectHighlightRatio = subjectStats?.highlightRatio ?? highlightRatio;
+
+  // P3-3: Animation lighting guard
+  // Cel-shaded animation has hard edges (no soft gradient), so gradient-based
+  // rim light = 0. Use brightness ratio heuristic instead.
+  // isAnimLighting: only cel (2D) animation has rim light and gradient issues.
+  // CG animation renders realistic lighting from virtual light sources.
+  const isAnimLighting = contentMode && contentMode.isAnimation && contentMode.isCelAnim && contentMode.confidence > 0.40;
+  // For animation: replace gradient-based rimLightStrength with perimeter brightness ratio
+  const effRimLightStrength = isAnimLighting
+    ? clamp(((perimMax / 255) - (subjectStats?.avgBrightness ?? centerBri / 255)) * 2.5, 0, 1)
+    : rimLightStrength;
   const subjectWarmSplit = subjectLeft && subjectRight
     ? Math.abs((subjectLeft.warmRatio - subjectLeft.coolRatio) - (subjectRight.warmRatio - subjectRight.coolRatio))
     : 0;
@@ -7457,7 +7468,7 @@ function estimateLighting(colorAnalysis, composition, faceAnalysis, edgeMap, pix
   const isBacklit = (
     (centerBri / (perimMax + 1)) < 0.72
     && highlightRatio > 0.08
-  ) || rimLightStrength > 0.62;
+  ) || effRimLightStrength > 0.62;
 
   const combinedVertBias = subjectVertBias * 0.68 + vertBias * 0.32;
   const combinedHorizBias = subjectHorizBias * 0.72 + horizBias * 0.28;
@@ -7505,9 +7516,12 @@ function estimateLighting(colorAnalysis, composition, faceAnalysis, edgeMap, pix
     clamp((keyFillRatio - 2.3) * 0.24, 0, 1) * 0.7 +
     clamp((contrastRatio - 0.26) * 3.5, 0, 1) * 0.5;
 
+  // Animation: modelingAsym is near 0 by default (cel-shading), so
+  // reduce its contribution and rely more on contrastRatio for Flat detection
+  const flatModelingWeight = isAnimLighting ? 0.25 : 0.65;  // lower for animation
   scores['Flat'] =
     clamp((0.30 - contrastRatio) * 5.2, 0, 1) * 1.0 +
-    clamp((0.10 - modelingAsym) * 8, 0, 1) * 0.65 +
+    clamp((0.10 - modelingAsym) * 8, 0, 1) * flatModelingWeight +
     clamp((1.8 - keyFillRatio) * 0.8, 0, 1) * 0.55 +
     (lightingHardness === 'Soft' ? 0.18 : 0);
 
@@ -7520,7 +7534,7 @@ function estimateLighting(colorAnalysis, composition, faceAnalysis, edgeMap, pix
 
   scores['Silhouette'] =
     (isBacklit ? 1.25 : 0) +
-    rimLightStrength * 0.65 +
+    effRimLightStrength * 0.65 +
     clamp((0.55 - (subjectStats?.avgBrightness ?? centerBri / 255)) * 3.4, 0, 1) * 0.75 +
     clamp((subjectRing?.avgBrightness ?? perimMax / 255) - (subjectStats?.avgBrightness ?? centerBri / 255), 0, 1) * 0.7;
 
@@ -7673,7 +7687,7 @@ async function analyzeFrameAdvanced(scene) {
   // === SHOT SIZE ESTIMATION ===
   let shotSize = estimateShotSize(composition, edgeMap, w, h, focusAnalysis, faceAnalysis, poseAnalysis, contentMode);
   let compositionTag = estimateCompositionTag(composition, faceAnalysis, poseAnalysis, focusAnalysis, edgeMap);
-  let lighting = estimateLighting(colorAnalysis, composition, faceAnalysis, edgeMap, pixels, w, h, poseAnalysis);
+  let lighting = estimateLighting(colorAnalysis, composition, faceAnalysis, edgeMap, pixels, w, h, poseAnalysis, contentMode);
 
   // #2: multiFrames 3???ㅼ닔寃??ы몴
   if (scene.multiFrames && scene.multiFrames.length >= 2) {
@@ -7706,7 +7720,7 @@ async function analyzeFrameAdvanced(scene) {
         const vpa = await analyzePoseFrame(vCanvas, vw, vh, vfa);
         const vs = estimateShotSize(vc, ve, vw, vh, vf, vfa, vpa, contentMode);
         const vComp = estimateCompositionTag(vc, vfa, vpa, vf, ve);
-        const vLight = estimateLighting(vColor, vc, vfa, ve, vpx, vw, vh, vpa);
+        const vLight = estimateLighting(vColor, vc, vfa, ve, vpx, vw, vh, vpa, contentMode);
         votes.push(vs.type);
         compositionResults.push(vComp);
         lightingResults.push(vLight);
@@ -7861,7 +7875,7 @@ async function analyzeFrameAdvanced(scene) {
   }
 
   // === DOF ESTIMATION ===
-  const dof = estimateDOF(focusAnalysis, shotSize, faceAnalysis, poseAnalysis);
+  const dof = estimateDOF(focusAnalysis, shotSize, faceAnalysis, poseAnalysis, contentMode);
   const framing = estimateFraming(faceAnalysis, poseAnalysis, composition);
   
   // ?? ?숈뒿 DB ?곸슜 ??????????????????????????????????????????????????????
@@ -8419,11 +8433,23 @@ function detectContentMode(pixels, w, h, edgeMap) {
 
   const raw = satEntropyScore * 0.55 + colorQuantScore * 0.45;
   const isAnimation = raw > 0.45;
+
+  // P3-4: Subtype detection - CG animation vs 2D/cel animation
+  // CG animation (Pixar/game-style) simulates real camera physics -> less need for guards
+  // 2D/cel animation (hand-drawn) has no optical physics -> apply all guards
+  // Cel indicators: very low entropy + very small palette
+  const isCelAnim  = isAnimation && satEntropy < 2.8 && colorSet.size < 200;
+  const isCGAnim   = isAnimation && !isCelAnim;  // higher color variety -> likely 3D/CG
+  const subtype = !isAnimation ? 'live' : isCelAnim ? 'cel' : 'cg';
+
   return {
     score: raw,
     isAnimation,
+    isCelAnim,  // true: 2D/cel - no optical physics, apply all animation guards
+    isCGAnim,   // true: CG - has virtual camera physics, guards partially relaxed
+    subtype,    // 'live' | 'cel' | 'cg'
     confidence: Math.min(Math.abs(raw - 0.45) * 2.2, 1.0),
-    detail: `satEntropy=${satEntropy.toFixed(2)} colorCount=${colorSet.size} animScore=${raw.toFixed(2)}`
+    detail: `satEntropy=${satEntropy.toFixed(2)} colorCount=${colorSet.size} animScore=${raw.toFixed(2)} subtype=${subtype}`
   };
 }
 
@@ -9064,8 +9090,9 @@ function estimateLens(focus, edgeMap, w, h, color, shotSize, faceAnalysis, poseA
 
   // Animation lens guard:
   // Real lens physics (bokeh, optical compression, barrel distortion) don't apply to animation.
-  // Only apply optical analysis when: content is live-action, OR animator explicitly rendered DOF.
-  if (contentMode && contentMode.isAnimation && contentMode.confidence > 0.40) {
+  // Only apply optical analysis when: live-action, CG (virtual camera), OR cel with explicit DOF.
+  // CG animation uses a virtual camera with real physics - lens estimation is valid for CG.
+  if (contentMode && contentMode.isAnimation && contentMode.isCelAnim && contentMode.confidence > 0.40) {
     // Check for deliberately rendered radial DOF (all three signals must be elevated)
     const deliberateDOF = sharpnessRatio > 1.8 && radialFalloff > 1.6 && bgCompression > 1.6;
     if (!deliberateDOF) {
@@ -9176,7 +9203,8 @@ function estimateLens(focus, edgeMap, w, h, color, shotSize, faceAnalysis, poseA
     0.46, 0.74
   );
   // Cap confidence for animation content (deliberate DOF path)
-  const animConfCap = (contentMode && contentMode.isAnimation && contentMode.confidence > 0.40) ? 0.68 : 1.0;
+  // animConfCap: only apply to cel (2D) animation; CG has real virtual camera angles
+  const animConfCap = (contentMode && contentMode.isAnimation && contentMode.isCelAnim && contentMode.confidence > 0.40) ? 0.68 : 1.0;
 
   return {
     type: 'Normal(35-60mm)', confidence: Math.min(normalConf, animConfCap),
@@ -9199,7 +9227,9 @@ function estimateAngle(composition, color, w, h, faceAnalysis, poseAnalysis, edg
   // Sky/ground brightness and foreshortening ratio are based on real-world
   // camera physics and are unreliable in drawn animation.
   // Replace them with neutral values when animation is detected.
-  const isAnimScene = contentMode && contentMode.isAnimation && contentMode.confidence > 0.40;
+  // isAnimScene: only cel (2D) animation has unreliable sky/ground/foreshortening signals.
+  // CG animation uses simulated real-world lighting and perspective, so signals remain valid.
+  const isAnimScene = contentMode && contentMode.isAnimation && contentMode.isCelAnim && contentMode.confidence > 0.40;
   const effSkyLikely    = isAnimScene ? false : skyLikely;
   const effGroundLikely = isAnimScene ? false : groundLikely;
   // Dampen vertBias for animation (keep 30% to preserve mild composition cues)
@@ -9396,7 +9426,7 @@ function estimateAngle(composition, color, w, h, faceAnalysis, poseAnalysis, edg
   return { type: 'Eye-level', confidence: 0.44, detail: 'Vertical angle cues are weak, so the fallback stays at eye level.', tilt: 0 };
 }
 
-function estimateDOF(focus, shotSize, faceAnalysis, poseAnalysis) {
+function estimateDOF(focus, shotSize, faceAnalysis, poseAnalysis, contentMode) {
   const {
     centerSharpness, avgPeriphery, sharpnessRatio, overallSharpness,
     topSharpness, bottomSharpness, leftSharpness, rightSharpness,
@@ -9410,6 +9440,29 @@ function estimateDOF(focus, shotSize, faceAnalysis, poseAnalysis) {
   const isMacroShot = ['ECU', 'BCU', 'INSERT'].includes(shotType);
   const isCloseUp   = ['CU', 'BCU', 'ECU', 'INSERT', 'MCU'].includes(shotType);
   const isWide      = ['LS', 'ELS', 'Establishing'].includes(shotType);
+
+  // P3-2: Animation DOF guard.
+  // Animation has no optical lens, so sharpnessRatio reflects rendering choices,
+  // NOT focal plane physics. Flat-shaded frames naturally have uniform sharpness
+  // and look like 'Deep' focus when they are actually 'Normal' (no DOF simulated).
+  // Tilt-shift and Macro are optical effects that don't exist in animation.
+  // isAnimDOF: only for cel animation. CG animation renders real DOF from virtual cameras.
+  const isAnimDOF = contentMode && contentMode.isAnimation && contentMode.isCelAnim && contentMode.confidence > 0.40;
+  if (isAnimDOF) {
+    // Only trust DOF signal if there is a strong explicit blur gradient
+    // (meaning the animator explicitly rendered bokeh/depth blur)
+    const explicitBlurRendered = sharpnessRatio > 2.2 && zoneVariance > 12;
+    if (!explicitBlurRendered) {
+      // No deliberate DOF rendering detected -> default to Normal
+      return {
+        type: 'Normal', confidence: 0.55,
+        detail: 'Animation frame without explicit depth blur rendering - defaulting to Normal DOF.',
+        focusPlane: 'pan-focus', separation: 0
+      };
+    }
+    // Explicit blur: allow shallow detection but cap at Shallow (not Very-shallow for most animation)
+    // Fall through to main logic but constrain: skip Tilt-shift, Macro, Deep, Soft-focus paths below
+  }
 
   // ?? 1. Soft-focus / diffusion (everything uniformly low sharpness) ????????
   // All zones are soft and sharpness is evenly distributed ??optical filter, fog, or haze
@@ -9427,7 +9480,7 @@ function estimateDOF(focus, shotSize, faceAnalysis, poseAnalysis) {
   const bottomSoft = bottomSharpness < centerSharpness * 0.60;
   const tiltScore  = (topSoft ? 0.44 : 0) + (bottomSoft ? 0.44 : 0)
                    + (midVsEdgeRatio > 1.5 ? 0.12 : 0);
-  if (tiltScore >= 0.80 && sharpnessRatio > 1.28) {
+  if (tiltScore >= 0.80 && sharpnessRatio > 1.28 && !isAnimDOF) {
     return {
       type: 'Tilt-shift', confidence: clamp(0.58 + tiltScore * 0.24, 0.58, 0.84),
       detail: 'A narrow horizontal sharp band with soft top and bottom regions fits a tilt-shift or miniature effect.',
@@ -9437,7 +9490,7 @@ function estimateDOF(focus, shotSize, faceAnalysis, poseAnalysis) {
 
   // ?? 3. Macro (extreme close focus) ???????????????????????????????????????
   // ECU/INSERT shot + extreme center/periphery difference + almost no periphery detail
-  if (isMacroShot && sharpnessRatio > 2.7 && avgPeriphery < centerSharpness * 0.32) {
+  if (isMacroShot && sharpnessRatio > 2.7 && avgPeriphery < centerSharpness * 0.32 && !isAnimDOF) {
     return {
       type: 'Macro', confidence: clamp(0.62 + (sharpnessRatio - 2.7) * 0.07, 0.62, 0.90),
       detail: `Extreme close framing (${shotType}) with almost all sharpness concentrated at the center fits macro focus.`,
@@ -9492,7 +9545,8 @@ function estimateDOF(focus, shotSize, faceAnalysis, poseAnalysis) {
 
   // ?? 7. Deep focus ?????????????????????????????????????????????????????????
   // Uniform sharpness, high overall detail, wide or landscape shot
-  if (sharpnessRatio < 1.14 && overallSharpness > 8.0) {
+  // Animation: uniform sharpness means NO DOF, not Deep focus (optical lens effect)
+  if (sharpnessRatio < 1.14 && overallSharpness > 8.0 && !isAnimDOF) {
     const conf = clamp(0.64 + (overallSharpness - 8.0) * 0.025, 0.64, 0.84);
     return {
       type: 'Deep', confidence: conf,
