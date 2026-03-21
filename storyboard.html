@@ -3321,7 +3321,7 @@ function findLearningMatch(features, field) {
   return best && bestSim >= LEARNING_THRESHOLD ? { label: best.label, similarity: bestSim } : null;
 }
 
-function addLearningEntry(field, label, features, videoName) {
+function addLearningEntry(field, label, features, videoName, type = 'negative') {
   const db = loadLearningDB();
   // ?대? 媛숈? ?꾨뱶??嫄곗쓽 ?숈씪???뱀쭠踰≫꽣媛 ?덉쑝硫???뼱?곌린
   const deduped = db.entries.filter(e => {
@@ -3334,6 +3334,7 @@ function addLearningEntry(field, label, features, videoName) {
     videoName: videoName || '',
     field,
     label,
+    type,
     features
   });
   // ?꾨뱶蹂?理쒕? MAX_ENTRIES_PER_FIELD 媛??좎?
@@ -3364,15 +3365,43 @@ function learnFromBenchmarkComparison(rows) {
     { rowKey: 'compositionHit',       benchKey: 'composition',       camKey: 'composition' }
   ];
   let learned = 0;
+  // Count existing negatives per field for positive throttle
+  const existingDB = loadLearningDB();
+  const negCount = {};
+  for (const e of existingDB.entries) {
+    if (e.type !== 'positive') negCount[e.field] = (negCount[e.field] || 0) + 1;
+  }
+  const posCount = {};
+  for (const e of existingDB.entries) {
+    if (e.type === 'positive') posCount[e.field] = (posCount[e.field] || 0) + 1;
+  }
+
   for (const row of rows) {
     if (!row.detectedScene) continue;
     const features = row.detectedScene.camera?._features;
     if (!features) continue;
     for (const f of LEARNABLE) {
       if (row[f.rowKey] === false) {
+        // Negative: save the correct label
         const correctLabel = row.benchmarkScene[f.benchKey];
         if (!correctLabel) continue;
-        addLearningEntry(f.camKey, correctLabel, features, videoFile?.name);
+        addLearningEntry(f.camKey, correctLabel, features, videoFile?.name, 'negative');
+        negCount[f.camKey] = (negCount[f.camKey] || 0) + 1;
+        learned++;
+      } else if (row[f.rowKey] === true) {
+        // Positive: save what we detected correctly, but throttle
+        // Limit: positives per field <= 2x negatives (min 3 negatives required)
+        const negN = negCount[f.camKey] || 0;
+        const posN = posCount[f.camKey] || 0;
+        if (negN < 3) continue;  // need baseline negatives first
+        if (posN >= negN * 2) continue;  // positives capped at 2x negatives
+        const detectedLabel = row.detectedScene.camera?.[f.camKey];
+        if (!detectedLabel) continue;
+        // Only save if detected label matches benchmark (sanity check)
+        const benchLabel = row.benchmarkScene[f.benchKey];
+        if (detectedLabel !== benchLabel) continue;
+        addLearningEntry(f.camKey, detectedLabel, features, videoFile?.name, 'positive');
+        posCount[f.camKey] = (posCount[f.camKey] || 0) + 1;
         learned++;
       }
     }
@@ -3383,8 +3412,12 @@ function learnFromBenchmarkComparison(rows) {
 function getLearningDBStats() {
   const db = loadLearningDB();
   const byField = {};
-  for (const e of db.entries) byField[e.field] = (byField[e.field] || 0) + 1;
-  return { total: db.entries.length, byField };
+  let positives = 0, negatives = 0;
+  for (const e of db.entries) {
+    byField[e.field] = (byField[e.field] || 0) + 1;
+    if (e.type === 'positive') positives++; else negatives++;
+  }
+  return { total: db.entries.length, byField, positives, negatives };
 }
 
 function clearLearningDB() {
@@ -8152,7 +8185,8 @@ function analyzeFocusRegions(edgeMap, w, h) {
   // 7 spatial zones: center square, 4 periphery thirds, horizontal mid-band, outer ring
   const R = {
     center: 0, top: 0, bottom: 0, left: 0, right: 0, midBand: 0, outer: 0,
-    cC: 0, tC: 0, bC: 0, lC: 0, rC: 0, mC: 0, oC: 0
+    cC: 0, tC: 0, bC: 0, lC: 0, rC: 0, mC: 0, oC: 0,
+    corner: 0, cnC: 0  // 4 corners (25%x25%) - perspective compression proxy
   };
   const cx1 = w * 0.25, cx2 = w * 0.75, cy1 = h * 0.25, cy2 = h * 0.75;
 
@@ -8168,6 +8202,8 @@ function analyzeFocusRegions(edgeMap, w, h) {
       if (nx > 0.67)                                  { R.right   += e; R.rC++; }
       if (ny > 0.25 && ny < 0.75)                     { R.midBand += e; R.mC++; }  // tilt-shift band
       if (nx < 0.14 || nx > 0.86 || ny < 0.14 || ny > 0.86) { R.outer += e; R.oC++; } // frame edge
+      // Corners: 4 quadrants of the outer 25%x25% - perspective compression proxy
+      if ((nx < 0.25 || nx > 0.75) && (ny < 0.25 || ny > 0.75)) { R.corner += e; R.cnC++; }
     }
   }
 
@@ -8177,7 +8213,8 @@ function analyzeFocusRegions(edgeMap, w, h) {
   const ls  = R.lC  > 0 ? R.left    / R.lC  : 0;
   const rs  = R.rC  > 0 ? R.right   / R.rC  : 0;
   const mbs = R.mC  > 0 ? R.midBand / R.mC  : 0; // full-width horizontal mid-band
-  const ors = R.oC  > 0 ? R.outer   / R.oC  : 0; // outermost ring
+  const ors  = R.oC  > 0 ? R.outer  / R.oC  : 0; // outermost ring
+  const cors = R.cnC > 0 ? R.corner / R.cnC : 0; // corner zone sharpness
 
   const peripherySharpness = [ts, bs, ls, rs];
   const avgPeriphery = (ts + bs + ls + rs) / 4;
@@ -8197,6 +8234,11 @@ function analyzeFocusRegions(edgeMap, w, h) {
     centerBgRatio:  ts  > 0 ? cs / ts  : 1,   // center vs background (top region)
     centerFgRatio:  bs  > 0 ? cs / bs  : 1,   // center vs foreground (bottom region)
     midVsEdgeRatio: ors > 0 ? mbs / ors : 1,  // horizontal band vs frame edge (tilt-shift)
+    // perspRatio: corner detail relative to center
+    //   High (>0.55): corners retain detail -> possible telephoto compression
+    //   Low (<0.25): corners much less detailed -> wide/deep focus, or shallow DOF
+    perspRatio: cs > 0 ? cors / cs : 0.5,
+    cornerSharpness: cors,
     zoneVariance
   };
 }
@@ -8756,6 +8798,50 @@ async function estimateMotion(scene) {
     const subStableXY   = Math.abs(subDX) < 0.07 && Math.abs(subDY) < 0.07;
     const subStableSize = Math.abs(subDS) < 0.06;
 
+    // P2-2: Background-region stability check.
+    // Compare first vs last coarse frame, but ONLY for pixels outside the subject bbox.
+    // If background pixels are stable (low MAD) but subject region changed a lot,
+    // it is strong evidence of character animation on a static camera.
+    let bgStabilityEvidence = null;  // { bgMAD, subjMAD, bgStable, subjActive }
+    if (subjectPresent && coarseFrames.length >= 2) {
+      const cf0 = coarseFrames[0];
+      const cfN = coarseFrames[coarseFrames.length - 1];
+      const bw = cf0.w, bh = cf0.h;
+
+      // Estimate subject bounding box from center + size (heightRatio)
+      const avgSubCX = subjects.reduce((s, sub) => s + sub.centerX, 0) / subjects.length;
+      const avgSubCY = subjects.reduce((s, sub) => s + sub.centerY, 0) / subjects.length;
+      const maxSubSz = Math.max(...subjects.map(sub => sub.size));
+      const bboxL = Math.max(0,  Math.floor((avgSubCX - maxSubSz * 0.45) * bw));
+      const bboxR = Math.min(bw, Math.ceil( (avgSubCX + maxSubSz * 0.45) * bw));
+      const bboxT = Math.max(0,  Math.floor((avgSubCY - maxSubSz * 0.60) * bh));
+      const bboxB = Math.min(bh, Math.ceil( (avgSubCY + maxSubSz * 0.60) * bh));
+
+      let bgDiff = 0, bgCount = 0, subjDiff = 0, subjCount = 0;
+      for (let y = 0; y < bh; y++) {
+        for (let x = 0; x < bw; x++) {
+          const diff = Math.abs(cf0.gray[y * bw + x] - cfN.gray[y * bw + x]);
+          if (x >= bboxL && x < bboxR && y >= bboxT && y < bboxB) {
+            subjDiff += diff; subjCount++;
+          } else {
+            bgDiff += diff; bgCount++;
+          }
+        }
+      }
+
+      const bgMAD   = bgCount   > 0 ? bgDiff   / bgCount   : 0;
+      const subjMAD = subjCount > 0 ? subjDiff / subjCount : 0;
+      // bgMAD < 8.0 / 255 ~ 3.1%: background barely changed
+      // subjMAD > 18.0 / 255 ~ 7.1%: subject changed significantly
+      const bgStable   = bgMAD   < 8.0;   // very little background change
+      const subjActive = subjMAD > 18.0;  // subject changed significantly
+      const bgRatio    = bgCount > 0 ? bgCount / (bw * bh) : 0;  // fraction of frame that is background
+      if (bgRatio > 0.25) {  // only valid if enough background is visible
+        bgStabilityEvidence = { bgMAD, subjMAD, bgStable, subjActive,
+          ratio: subjMAD / Math.max(bgMAD, 0.5), bgRatio };
+      }
+    }
+
     // Subject motion alignment check:
     // If global optical flow direction matches where the subject moved,
     // the flow is likely measuring character animation, NOT camera movement.
@@ -8861,6 +8947,17 @@ async function estimateMotion(scene) {
         detail: 'The move is smooth, multi-axis, and lacks a stable foreground subject, which is closer to drone or aerial motion.', direction: dirLabel(avgDx, avgDy), speed, smoothness };
     }
 
+    // Background stability override (P2-2):
+    // When background pixels are stable but subject region changed a lot,
+    // this is strong evidence the camera is static and subject is animating.
+    if (bgStabilityEvidence && bgStabilityEvidence.bgStable && bgStabilityEvidence.subjActive
+        && bgStabilityEvidence.ratio > 2.5 && bgStabilityEvidence.bgRatio > 0.30) {
+      const bgConf = clamp(0.60 + (bgStabilityEvidence.ratio - 2.5) * 0.05, 0.60, 0.84);
+      return { type: 'Static', confidence: bgConf,
+        detail: `Background pixels are stable (MAD=${bgStabilityEvidence.bgMAD.toFixed(1)}) while subject region changed (MAD=${bgStabilityEvidence.subjMAD.toFixed(1)}) \u2014 camera is locked, subject is animating.`,
+        direction: null, speed: 'none', smoothness: 1.0 };
+    }
+
     // Subject motion alignment override:
     // If global flow aligns closely with tracked subject movement,
     // the camera is likely static and we're seeing character animation.
@@ -8937,6 +9034,10 @@ function estimateLens(focus, edgeMap, w, h, color, shotSize, faceAnalysis, poseA
   const faceH            = Math.max(faceAnalysis?.maxHeightRatio ?? 0, pose?.faceHeightRatio ?? 0);
   const subjectWidth     = pose?.widthRatio ?? faceAnalysis?.boxes?.[0]?.width ?? 0;
   const diagER           = edgeMap.diagonalEnergyRatio ?? 0;
+  // perspRatio: corner sharpness / center sharpness (perspective compression proxy)
+  // High -> telephoto (compressed background retains detail)
+  // Low  -> wide lens or shallow DOF (corners blurry / less detailed)
+  const perspRatio       = focus.perspRatio ?? 0.5;
 
   // Subject at frame edge ??wide-angle perspective distortion / stretch
   const edgeDistortion = (
@@ -9009,10 +9110,11 @@ function estimateLens(focus, edgeMap, w, h, color, shotSize, faceAnalysis, poseA
   // Signatures: very large face in ECU/BCU, extreme background compression,
   //             very high sharpness ratio, straight H/V lines (no distortion)
   const stScore =
-    clamp((sharpnessRatio - 2.0) / 1.2, 0, 1) * 0.35 +
-    clamp((bgCompression - 1.8) / 1.2, 0, 1) * 0.30 +
-    (isECU_BCU ? 0.20 : 0) +
-    (faceH > 0.38 ? clamp((faceH - 0.38) / 0.28, 0, 1) * 0.15 : 0);
+    clamp((sharpnessRatio - 2.0) / 1.2, 0, 1) * 0.32 +
+    clamp((bgCompression - 1.8) / 1.2, 0, 1) * 0.28 +
+    (isECU_BCU ? 0.18 : 0) +
+    (faceH > 0.38 ? clamp((faceH - 0.38) / 0.28, 0, 1) * 0.13 : 0) +
+    clamp((perspRatio - 0.40) / 0.35, 0, 1) * 0.09;  // corner detail retention
   if (stScore > 0.45 || (isECU_BCU && sharpnessRatio > 2.2 && faceH > 0.36)) {
     return {
       type: 'Super-telephoto(>135mm)', confidence: clamp(0.60 + stScore * 0.28, 0.60, 0.88),
@@ -9025,12 +9127,13 @@ function estimateLens(focus, edgeMap, w, h, color, shotSize, faceAnalysis, poseA
   // Signatures: background bokeh (centerBgRatio high), shallow DOF, face in CU/MCU,
   //             steep radial sharpness falloff, H/V line dominance (no barrel distortion)
   const teleScore =
-    clamp((sharpnessRatio - 1.55) / 0.75, 0, 1) * 0.28 +
-    clamp((bgCompression - 1.30) / 0.80, 0, 1) * 0.24 +
+    clamp((sharpnessRatio - 1.55) / 0.75, 0, 1) * 0.25 +
+    clamp((bgCompression - 1.30) / 0.80, 0, 1) * 0.22 +
     clamp((radialFalloff - 1.35) / 1.00, 0, 1) * 0.14 +
     ((isCU_up || isMid) ? 0.14 : 0) +
     (faceH > 0.14 ? clamp((faceH - 0.14) / 0.28, 0, 1) * 0.12 : 0) +
-    (hvConc > 0.46 ? clamp((hvConc - 0.46) / 0.20, 0, 1) * 0.08 : 0);
+    (hvConc > 0.46 ? clamp((hvConc - 0.46) / 0.20, 0, 1) * 0.08 : 0) +
+    clamp((perspRatio - 0.30) / 0.40, 0, 1) * 0.05;  // perspective compression
   if (teleScore > 0.32 || (isCU_up && sharpnessRatio > 1.60 && faceH > 0.16)) {
     return {
       type: 'Telephoto(60-135mm)', confidence: clamp(0.55 + teleScore * 0.33, 0.55, 0.88),
@@ -9050,7 +9153,9 @@ function estimateLens(focus, edgeMap, w, h, color, shotSize, faceAnalysis, poseA
     clamp((overallSharpness - 8.0) / 4.0, 0, 1) * 0.18 +
     (edgeDistortion ? 0.14 : 0) +
     (isWide ? 0.10 : 0) +
-    (hvConc < 0.46 ? clamp((0.46 - hvConc) / 0.15, 0, 1) * 0.04 : 0);
+    (hvConc < 0.46 ? clamp((0.46 - hvConc) / 0.15, 0, 1) * 0.04 : 0) +
+    clamp((0.30 - perspRatio) / 0.20, 0, 1) * 0.06 -  // wide: corners lack detail
+    clamp((perspRatio - 0.55) / 0.20, 0, 1) * 0.08;   // penalize if corners retain detail (tele)
   if (wideScore > 0.30 || edgeDistortion) {
     return {
       type: 'Wide(16-35mm)', confidence: clamp(0.52 + wideScore * 0.30, 0.52, 0.82),
