@@ -7650,6 +7650,8 @@ async function analyzeFrameAdvanced(scene) {
       const votes = [shotSize.type];
       const compositionResults = [compositionTag];
       const lightingResults = [lighting];
+      const angleVotes = [];   // populated inside loop; applied after estimateAngle
+      const lensVotes  = [];   // populated inside loop; applied after estimateLens
       const compositionScoreTotals = Object.entries(compositionTag.scores || {}).reduce((acc, [label, score]) => {
         acc[label] = score;
         return acc;
@@ -7675,6 +7677,13 @@ async function analyzeFrameAdvanced(scene) {
         votes.push(vs.type);
         compositionResults.push(vComp);
         lightingResults.push(vLight);
+        // Angle & lens votes per extra frame
+        const vcm = detectContentMode(vpx, vw, vh, ve);
+        const vColor2 = vColor;
+        const vAngleResult = estimateAngle(vc, vColor2, vw, vh, vfa, vpa, ve, vs, vcm);
+        const vLensResult  = estimateLens(vf, ve, vw, vh, vColor2, vs, vfa, vpa, vcm);
+        angleVotes.push(vAngleResult.type);
+        lensVotes.push(vLensResult.type);
         Object.entries(vComp.scores || {}).forEach(([label, score]) => {
           compositionScoreTotals[label] = (compositionScoreTotals[label] || 0) + score;
         });
@@ -7685,6 +7694,10 @@ async function analyzeFrameAdvanced(scene) {
       if (best[1] >= 2 && best[0] !== shotSize.type) {
         shotSize = { ...shotSize, type: best[0], detail: shotSize.detail + ` [vote:${votes.join('/')}]` };
       }
+      // Confidence adjustment: unanimous = +0.10, split = -0.08
+      const voteAgreement = best[1] / votes.length;
+      const confDelta = voteAgreement === 1.0 ? 0.10 : voteAgreement < 0.5 ? -0.08 : 0;
+      shotSize = { ...shotSize, confidence: clamp((shotSize.confidence || 0.5) + confDelta, 0.35, 0.95) };
       const compositionVoteTally = {};
       for (const result of compositionResults) {
         compositionVoteTally[result.type] = (compositionVoteTally[result.type] || 0) + 1;
@@ -7782,13 +7795,37 @@ async function analyzeFrameAdvanced(scene) {
   }
 
   // === LENS ESTIMATION ===
-  const lens = estimateLens(focusAnalysis, edgeMap, w, h, colorAnalysis, shotSize, faceAnalysis, poseAnalysis, contentMode);
+  let lens = estimateLens(focusAnalysis, edgeMap, w, h, colorAnalysis, shotSize, faceAnalysis, poseAnalysis, contentMode);
+  // Apply multi-frame votes if available
+  if (typeof lensVotes !== 'undefined' && lensVotes.length > 0) {
+    const allLV = [lens.type, ...lensVotes];
+    const lvTally = {};
+    for (const v of allLV) lvTally[v] = (lvTally[v] || 0) + 1;
+    const bestLV = Object.entries(lvTally).sort((a, b) => b[1] - a[1])[0];
+    if (bestLV[1] >= 2 && bestLV[0] !== lens.type) {
+      lens = { ...lens, type: bestLV[0], detail: lens.detail + ` [vote:${allLV.join('/')}]` };
+    }
+    const lvAgreement = bestLV[1] / allLV.length;
+    lens = { ...lens, confidence: clamp((lens.confidence || 0.5) + (lvAgreement === 1 ? 0.10 : lvAgreement < 0.5 ? -0.08 : 0), 0.35, 0.94) };
+  }
 
   // === CAMERA MOVEMENT ===
   const movement = motionData;
 
   // === ANGLE ESTIMATION ===
-  const angle = estimateAngle(composition, colorAnalysis, w, h, faceAnalysis, poseAnalysis, edgeMap, shotSize, contentMode);
+  let angle = estimateAngle(composition, colorAnalysis, w, h, faceAnalysis, poseAnalysis, edgeMap, shotSize, contentMode);
+  // Apply multi-frame votes if available
+  if (typeof angleVotes !== 'undefined' && angleVotes.length > 0) {
+    const allAV = [angle.type, ...angleVotes];
+    const avTally = {};
+    for (const v of allAV) avTally[v] = (avTally[v] || 0) + 1;
+    const bestAV = Object.entries(avTally).sort((a, b) => b[1] - a[1])[0];
+    if (bestAV[1] >= 2 && bestAV[0] !== angle.type) {
+      angle = { ...angle, type: bestAV[0], detail: angle.detail + ` [vote:${allAV.join('/')}]` };
+    }
+    const avAgreement = bestAV[1] / allAV.length;
+    angle = { ...angle, confidence: clamp((angle.confidence || 0.5) + (avAgreement === 1 ? 0.10 : avAgreement < 0.5 ? -0.08 : 0), 0.35, 0.94) };
+  }
 
   // === DOF ESTIMATION ===
   const dof = estimateDOF(focusAnalysis, shotSize, faceAnalysis, poseAnalysis);
@@ -8353,7 +8390,20 @@ function estimateShotSize(composition, edgeMap, w, h, focus, faceAnalysis, poseA
   const centerW = composition.centerWeight;
   const edgeDensity = edgeMap.avgEdge;
 
-  if (poseAnalysis?.primary) {
+  // Pose quality gate: only trust pose when landmarks are physically plausible.
+  // Bad poses (extreme angles, heavy occlusion, random landmark scatter) cascade
+  // to wrong cropLevel and wrong shot size - better to fall through to face analysis.
+  const poseReliable = (() => {
+    const p = poseAnalysis?.primary;
+    if (!p) return false;
+    if (p.confidence < 0.45) return false;           // too many low-confidence landmarks
+    if (p.cropLevel === 'unknown') return false;     // no identifiable body part
+    const ar = p.heightRatio / Math.max(p.widthRatio, 0.01);
+    if (ar < 0.4 || ar > 10.0) return false;        // physically impossible aspect ratio
+    return true;
+  })();
+
+  if (poseReliable) {
     const pose = poseAnalysis.primary;
     const subjectHeight = pose.heightRatio;
     const subjectArea = pose.areaRatio;
@@ -8785,13 +8835,14 @@ async function estimateMotion(scene) {
         detail: `Scale change (${(avgAbsScale * 100).toFixed(1)}%) combines with translation, which fits a ${inward ? 'push-in' : 'pull-out'}.`, direction: inward ? 'in' : 'out', speed, smoothness };
     }
 
-    // Handheld (high residual, low directional coherence)
-    if (avgGain < 0.085 && avgResidual > 0.10) {
+    // Handheld (high residual, low directional coherence, bounded magnitude)
+    // avgMagnitude < 2.0: fast smooth motions go to Steadicam, not Handheld
+    if (avgGain < 0.085 && avgResidual > 0.10 && avgMagnitude < 2.0) {
       return { type: 'Handheld', confidence: 0.63, detail: 'Residual shake stays high without clean directional consistency, which reads as handheld.', direction: dirLabel(avgDx, avgDy), speed, smoothness: Math.max(0, smoothness - 0.2) };
     }
 
     // Whip-pan
-    if (Math.abs(avgDx) > Math.abs(avgDy) * 1.65 && Math.abs(avgDx) >= 4.2 && dirConX > 0.78) {
+    if (Math.abs(avgDx) > Math.abs(avgDy) * 1.65 && Math.abs(avgDx) >= 2.8 && dirConX > 0.78) {
       return { type: 'Whip-pan', confidence: clamp(0.60 + avgGain * 0.65, 0.60, 0.93),
         detail: `A very fast horizontal sweep (avg ${avgDx.toFixed(1)}px) is closer to a whip-pan than a normal pan.`, direction: avgDx > 0 ? 'right' : 'left', speed: 'very-fast', smoothness };
     }
@@ -8819,7 +8870,8 @@ async function estimateMotion(scene) {
     }
 
     // Pan / Trucking (horizontal dominant)
-    if (Math.abs(avgDx) > Math.abs(avgDy) * 1.40 && Math.abs(avgDx) >= 1.1 && dirConX > 0.58) {
+    // avgAbsScale < 0.012: scale change present => likely zoom, not pan
+    if (Math.abs(avgDx) > Math.abs(avgDy) * 1.40 && Math.abs(avgDx) >= 1.1 && dirConX > 0.58 && avgAbsScale < 0.012) {
       const dir = avgDx > 0 ? 'right' : 'left';
       if (subjectPresent && subStableXY && avgAbsScale < 0.022 && avgResidual > 0.068) {
         return { type: 'Trucking', confidence: clamp(0.55 + avgGain * 0.65, 0.55, 0.84),
@@ -8830,7 +8882,8 @@ async function estimateMotion(scene) {
     }
 
     // Tilt / Pedestal (vertical dominant)
-    if (Math.abs(avgDy) > Math.abs(avgDx) * 1.40 && Math.abs(avgDy) >= 0.9 && dirConY > 0.58) {
+    // avgAbsScale < 0.012: scale change present => likely push-in/crane, not tilt
+    if (Math.abs(avgDy) > Math.abs(avgDx) * 1.40 && Math.abs(avgDy) >= 0.9 && dirConY > 0.58 && avgAbsScale < 0.012) {
       const dir = avgDy > 0 ? 'down' : 'up';
       if (subjectPresent && subStableXY && avgAbsScale < 0.022 && avgResidual > 0.068) {
         return { type: 'Pedestal', confidence: clamp(0.53 + avgGain * 0.65, 0.53, 0.83),
@@ -9056,11 +9109,19 @@ function estimateAngle(composition, color, w, h, faceAnalysis, poseAnalysis, edg
   const edgeRatio = topEdge / Math.max(botEdge, 0.001); // < 0.65 ??open/plain top region
 
   // Sky: bright top + structurally open + cool/neutral tones
-  const skyLikely = topAvg > 152 && composition.topOpenness > 0.48 && edgeRatio < 0.72
-                  && (color.coolRatio > 0.12 || topAvg > 185 || color.avgBrightness > 0.60);
+  // Improved: exclude overhead studio lighting (bright top + warm tones = ceiling lamp, not sky)
+  const skyLikely = topAvg > 140
+    && composition.topOpenness > 0.45
+    && edgeRatio < 0.72
+    && (color.coolRatio > 0.18 || topAvg > 195 || color.avgBrightness > 0.62)
+    && !(topAvg > 200 && color.warmRatio > 0.22);  // exclude warm overhead lighting
 
   // Ground/floor: uniform low-detail bottom (flat surface texture)
-  const groundLikely = botEdge < topEdge * 0.60 && composition.bottomOpenness > 0.46 && bottomAvg < topAvg * 1.20;
+  // Improved: exclude bright blue floors (pool, stage) from ground detection
+  const groundLikely = botEdge < topEdge * 0.60
+    && composition.bottomOpenness > 0.46
+    && bottomAvg < topAvg * 1.20
+    && !(color.coolRatio > 0.25 && bottomAvg > 140);  // exclude bright blue bottom
 
   // ?? 3. Subject geometry ???????????????????????????????????????????????????
   const subjectY    = subject?.centerY   ?? 0.5;
