@@ -7153,20 +7153,70 @@ function getDisplaySceneDescription(scene) {
 
 function buildLocalEvidenceBlock(camera) {
   if (!camera) return '';
-  const lines = [
-    '',
-    'Local heuristic cross-check from the same frame set. Use it as evidence, not as a script:'
-  ];
-  const cameraPrior = [camera.shotSize, camera.lensType, camera.angle, camera.movement].filter(Boolean).join(' / ');
-  if (cameraPrior) lines.push(`- Local camera prior: ${cameraPrior}`);
+  const lines = [''];
+
+  // === RAW SENSOR DATA (direct measurements, most trustworthy) ===
+  lines.push('=== LOCAL HEURISTIC ANALYSIS (diagnostic data, not ground truth) ===');
+
+  // Shot size body metrics
+  const m = camera.shotSizeMetrics;
+  if (m) {
+    const parts = [];
+    if (m.subjectHeight != null) parts.push(`body-fill=${(m.subjectHeight*100).toFixed(0)}%`);
+    if (m.faceHeight != null)    parts.push(`face-height=${(m.faceHeight*100).toFixed(0)}%`);
+    if (m.cropLevel)             parts.push(`crop=${m.cropLevel}`);
+    if (m.proportionFactor > 1.0) parts.push(`anim-correction=x${m.proportionFactor.toFixed(2)}`);
+    if (parts.length) lines.push(`BODY SENSOR: ${parts.join(', ')}`);
+    lines.push('  [Note]: body-fill<30%=wide, 30-55%=MS/MLS, >55%=CU range. For animated characters, anim-correction compensates large-head proportions.');
+  }
+
+  // Motion sensor
+  if (camera.movement) {
+    const movConf = camera.movementConf != null ? camera.movementConf.toFixed(2) : '?';
+    lines.push(`MOTION SENSOR: estimated=${camera.movement} (conf=${movConf})`);
+    if (camera.movementDetail) lines.push(`  Detail: ${camera.movementDetail.substring(0, 120)}`);
+    lines.push('  [Note]: If conf<0.60, motion is ambiguous. If detail mentions character animation, camera may be STATIC.');
+  }
+
+  // Lens/focus sensor
+  if (camera.lensType) {
+    const lensConf = camera.lensConf != null ? camera.lensConf.toFixed(2) : '?';
+    lines.push(`FOCUS SENSOR: estimated=${camera.lensType} (conf=${lensConf})`);
+    const cm = camera.contentMode;
+    if (cm && cm.isAnimation) {
+      lines.push(`  [WARNING]: Animation detected (score=${cm.score.toFixed(2)}). Lens estimates based on optical physics are UNRELIABLE for animation. Only confirm a specific lens if DOF artifacts are visibly rendered.`);
+    }
+  }
+
+  // Angle sensor
+  if (camera.angle) {
+    const angConf = camera.angleConf != null ? camera.angleConf.toFixed(2) : '?';
+    lines.push(`ANGLE SENSOR: estimated=${camera.angle} (conf=${angConf})`);
+  }
+
+  // === SUMMARY ESTIMATES (override freely if visual evidence disagrees) ===
+  lines.push('');
+  lines.push('HEURISTIC SUMMARY (low-weight prior - override if visual analysis disagrees):');
+  const cameraPrior = [
+    camera.shotSize  && `shotSize=${camera.shotSize}(${camera.shotSizeConf != null ? (camera.shotSizeConf*100).toFixed(0) : '?'}%)`,
+    camera.lensType  && `lens=${camera.lensType}`,
+    camera.angle     && `angle=${camera.angle}`,
+    camera.movement  && `movement=${camera.movement}`
+  ].filter(Boolean).join(' | ');
+  if (cameraPrior) lines.push(`  ${cameraPrior}`);
+
   const lightingSummary = buildLightingSummary(camera);
-  if (lightingSummary) lines.push(`- Local lighting prior: ${lightingSummary}`);
+  if (lightingSummary) lines.push(`  lighting: ${lightingSummary}`);
   const lightingMetricSuffix = buildLightingMetricSuffix(camera);
-  if (lightingMetricSuffix) lines.push(`- Local lighting metrics:${lightingMetricSuffix.replace(' Local cues:', '')}`);
+  if (lightingMetricSuffix) lines.push(`  lightingMetrics:${lightingMetricSuffix.replace(' Local cues:', '')}`);
   const compositionPrior = [camera.composition, camera.compositionSubtype, camera.compositionBalance, camera.compositionDepth].filter(Boolean).join(' / ');
-  if (compositionPrior) lines.push(`- Local composition prior: ${compositionPrior}`);
-  if (hasMeaningfulText(camera.compositionDetail)) lines.push(`- Local composition evidence: ${camera.compositionDetail}`);
-  return lines.join('\n');
+  if (compositionPrior) lines.push(`  composition: ${compositionPrior}`);
+  if (hasMeaningfulText(camera.compositionDetail)) lines.push(`  compositionEvidence: ${camera.compositionDetail}`);
+
+  lines.push('OVERRIDE POLICY: If your direct visual analysis contradicts any estimate above, TRUST YOUR VISUAL ANALYSIS. Document overrides in the relevant _detail field.');
+  lines.push('=== END LOCAL DATA ===');
+  return lines.join('
+');
 }
 
 function buildAICameraFromParsed(parsed) {
@@ -7807,7 +7857,8 @@ async function analyzeFrameAdvanced(scene) {
     compositionBalance:  compositionTag.compositionBalance  ?? null,
     compositionDepth:    compositionTag.compositionDepth    ?? null,
     _features,
-    _learnedOverrides: Object.keys(_learnedOverrides).length > 0 ? _learnedOverrides : null
+    _learnedOverrides: Object.keys(_learnedOverrides).length > 0 ? _learnedOverrides : null,
+    contentMode: contentMode || null
   };
 }
 
@@ -9587,12 +9638,20 @@ ${scene.multiFrames ? '3媛??꾨젅?꾩쓽 李⑥씠瑜?硫대???鍮꾧탳?섏�
 }
 
 function buildSceneAIPrompts(scene) {
+  const cm = scene.localCameraAnalysis && scene.localCameraAnalysis.contentMode;
+  const isAnimContent = cm && cm.isAnimation;
+
   const systemPrompt = [
-    'You are an expert cinematography analyst.',
-    'Internally reason like a panel of specialists in cinematography: director of photography, gaffer, portrait-lighting photographer, colorist, composition coach, and camera operator.',
-    'Use standard film-language definitions.',
-    'Keep enum fields in the canonical English labels from the schema, but write description, all *_detail fields, and narrative_purpose in Korean.',
-    'Reply with exactly one JSON object and no markdown.'
+    'You are a visual storytelling analyst with expertise in both live-action cinematography and animated media.',
+    'Your primary task: determine what is ACTUALLY VISIBLE IN THE FRAMES based on direct visual evidence, not assumptions.',
+    '',
+    'Operating principles:',
+    '1. DIRECT EVIDENCE FIRST. Begin every category analysis by observing only what you can see: subject framing, spatial relationships, lighting gradients, background stability across frames.',
+    '2. MEDIUM AWARENESS. First identify whether this is live-action or animation. Apply real-camera physics (bokeh, optical compression, realistic body proportions) ONLY to live-action. For animation, analyze SIMULATED cinematographic choices.',
+    '3. PRIOR SKEPTICISM. Local heuristic estimates in the data block are hypotheses to test, not conclusions to confirm. If direct visual evidence contradicts a prior, trust your visual analysis and explain the override.',
+    '4. CALIBRATED CONFIDENCE. Confidence scores must reflect actual uncertainty: 0.90+ = unambiguous visual proof | 0.75 = strong evidence with one minor ambiguity | 0.60 = evidence supports this but alternative is plausible | 0.45 = genuinely ambiguous, choosing the more likely. Never inflate confidence.',
+    '',
+    'Keep enum fields in canonical English labels. Write description, all *_detail fields, and narrative_purpose in Korean. Reply with exactly one JSON object and no markdown.'
   ].join(' ');
 
   const frameScope = scene.multiFrames && scene.multiFrames.length === 3
@@ -9600,31 +9659,57 @@ function buildSceneAIPrompts(scene) {
     : 'You are given one representative frame from the scene.';
   const localEvidence = buildLocalEvidenceBlock(scene.localCameraAnalysis);
 
+  // Animation-specific guidance (injected when animation is detected)
+  const animationGuidance = isAnimContent ? `
+=== ANIMATION CINEMATOGRAPHY RULES ===
+This content is detected as ANIMATION. Apply these rules:
+APPLIES: Shot size/framing (animators make deliberate framing decisions), camera angle (high/low/dutch relative to character), camera movement (only if BACKGROUND LAYER shifts between frames), depth staging.
+DOES NOT APPLY: Lens focal length physics (no real lens - only report specific lens if animator explicitly rendered bokeh/compression artifacts visible in the frame), realistic body proportions for shot size estimation.
+CRITICAL MOVEMENT RULE: In animation, character pose changes between frames do NOT indicate camera movement. Test: Does the BACKGROUND/ENVIRONMENT shift? Yes=camera moved. No=character animation only, camera is STATIC.
+SHOT SIZE: Base on head-to-frame ratio and body-part cutoffs, NOT on body area percentage (animated characters have exaggerated proportions - large heads, small bodies).
+=== END ANIMATION RULES ===
+` : '';
+
   const analysisPrompt = `${frameScope}
 Scene duration: ${scene.duration.toFixed(1)} seconds.
 
-Classify the scene with these rules:
-- Shot size: ECU, BCU, CU, MCU, MS, Cowboy, MLS, FS, LS, ELS, Establishing, INSERT.
-- Framing: Single, Two-shot, Three-shot, OTS, POV, Crowd, Empty.
-- Camera angle: Overhead, High, Eye-level, Shoulder-level, Low, Worms-eye, Dutch, Aerial.
-- Lens type: Ultra-wide(<16mm), Wide(16-35mm), Normal(35-60mm), Telephoto(60-135mm), Super-telephoto(>135mm), Macro.
-- Camera movement: Static, Pan, Whip-pan, Tilt, Push-in, Pull-out, Tracking, Trucking, Arc, Crane, Pedestal, Handheld, Steadicam, Zoom-in, Zoom-out, Dolly-zoom, Rack-focus, Drone.
-- Depth of field: Deep, Moderate, Shallow, Very-shallow.
-- Lighting type: Natural, Artificial, Mixed, Practical.
-- Lighting condition: High-key, Low-key, Silhouette, Chiaroscuro, Flat, Rembrandt.
-- Composition: Rule-of-thirds, Center-framed, Symmetrical, Leading-lines, Frame-within-frame, Negative-space, Golden-ratio.
+STEP 1 - MEDIUM IDENTIFICATION (complete before any other classification):
+Identify: [ ] Live-action  [ ] CG animation  [ ] 2D/cel animation  [ ] Mixed
+Evidence: describe color palette variety, edge sharpness type, texture detail.
 
-Decision guidance:
-- Shot size depends on how much of the subject or body is visible and where the frame crops the body.
+STEP 2 - SHOT SIZE reasoning chain (follow before answering):
+a) Subject type: human / character / animal / object / environment
+b) Body visibility: feet? knees? waist? chest? shoulders? full face? eyes only?
+c) Frame boundary: does subject extend beyond any edge? Which?
+d) If animation: use head-to-frame ratio and body-part cutoffs, NOT body area percentage
+e) Conclude shot size from observations above
+
+STEP 3 - CAMERA MOVEMENT reasoning chain (follow before answering):
+a) Identify 2-3 stable background reference elements across all frames
+b) Do ALL pixels shift uniformly? (camera) OR only certain objects? (subject motion)
+c) If animation: does the BACKGROUND LAYER move? If no -> STATIC, only character animates
+d) Zoom vs Dolly: Zoom=subject scales but background proportions unchanged; Dolly=background diverges
+e) Conclude movement type
+
+Classify the scene:
+- Shot size: ECU, BCU, CU, MCU, MS, Cowboy, MLS, FS, LS, ELS, Establishing, INSERT
+- Framing: Single, Two-shot, Three-shot, OTS, POV, Crowd, Empty
+- Camera angle: Overhead, High, Eye-level, Shoulder-level, Low, Worms-eye, Dutch, Aerial
+- Lens type: Ultra-wide(<16mm), Wide(16-35mm), Normal(35-60mm), Telephoto(60-135mm), Super-telephoto(>135mm), Macro
+- Camera movement: Static, Pan, Whip-pan, Tilt, Push-in, Pull-out, Tracking, Trucking, Arc, Crane, Pedestal, Handheld, Steadicam, Zoom-in, Zoom-out, Dolly-zoom, Rack-focus, Drone
+- Depth of field: Deep, Moderate, Shallow, Very-shallow
+- Lighting type: Natural, Artificial, Mixed, Practical
+- Lighting condition: High-key, Low-key, Silhouette, Chiaroscuro, Flat, Rembrandt
+- Composition: Rule-of-thirds, Center-framed, Symmetrical, Leading-lines, Frame-within-frame, Negative-space, Golden-ratio
+
+Additional guidance:
 - Lens depends on field of view, perspective stretch or compression, and depth separation.
-- Movement should use the sequence of frames: distinguish pan/tilt from physical travel and zoom.
-- Camera angle depends on whether the viewpoint looks up, down, level, or intentionally tilted.
-- For lighting, internally cross-check source motivation, key direction on the subject, hardness/contrast, color temperature, and rim/backlight cues before deciding.
-- Use Rembrandt only when directional facial modeling is present; use Silhouette only when the subject reads substantially darker than the background or rim.
-- For composition, internally cross-check subject placement, balance/symmetry, geometric lines, enclosing frames, and negative space before choosing one label.
-- If composition is ambiguous, pick the strongest primary pattern and explain the evidence in composition_detail.
-- If the local heuristic evidence conflicts with your read, trust the images and explain the decisive cue.
-- Describe the narrative purpose in one short sentence.
+- Camera angle: does the viewpoint look up, down, level, or intentionally tilted at the subject?
+- Lighting: cross-check source motivation, key direction, hardness/contrast, color temperature, rim/backlight.
+- Use Rembrandt only when directional facial shadow modeling is present; Silhouette only when subject reads substantially darker than background.
+- Composition: cross-check subject placement, balance/symmetry, geometric lines, enclosing frames, negative space.
+- Describe narrative purpose in one short Korean sentence.
+${animationGuidance}
 ${localEvidence}
 
 Return JSON only with this schema:
