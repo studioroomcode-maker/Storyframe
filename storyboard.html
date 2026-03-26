@@ -4458,11 +4458,11 @@ function normalizeBenchmarkData(payload) {
 function learnFromBenchmarkDiff() {
   if (!benchmarkData?.scenes?.length) {
     showToast('현재 감지 결과를 벤치마크 초안으로 만들었습니다.');
-    return 0;
+    return null;
   }
   if (!scenes.length) {
     showToast('먼저 스토리보드를 생성해주세요.');
-    return 0;
+    return null;
   }
   const FIELD_MAP = [
     { benchKey: 'shotSize',          camKey: 'shotSize',          canon: canonicalShotSize },
@@ -4500,10 +4500,16 @@ function learnFromBenchmarkDiff() {
 
 function learnOnly() {
   const count = learnFromBenchmarkDiff();
+  if (count == null) return; // already showed a toast
   if (count > 0) {
     showToast(`✨ ${count}개 장면 학습 완료 (전체 ${getLearningDBStats().total}개)`);
   } else {
-    showToast('학습 이력이 없습니다. 벤치마크에서 장면을 설정해주세요.');
+    const hasFeatures = scenes.some(s => s.camera?._features);
+    if (!hasFeatures) {
+      showToast('장면을 다시 분석해야 학습할 수 있습니다. 영상/이미지를 새로 불러와 분석해주세요.', 'warn');
+    } else {
+      showToast('수정된 레이블이 없습니다. 벤치마크에서 정답을 수정한 뒤 학습하세요.');
+    }
   }
 }
 
@@ -13928,10 +13934,7 @@ async function signOut() {
 // ── Cloud Save / Load ─────────────────────────────────────────────────────────
 function _compressSceneForCloud(s) {
   const { multiFrames, _features, ...rest } = s;
-  if (rest.camera) {
-    const { _features: _f, ...camRest } = rest.camera;
-    rest.camera = camRest;
-  }
+  // camera._features(학습 특징 벡터)는 유지 — 저장 후 로드해도 학습 기능 동작 필요
   // 썸네일 압축 (160×90, JPEG 50%)
   if (rest.image && rest.image.startsWith('data:image') && rest.image.length > 30000) {
     try {
