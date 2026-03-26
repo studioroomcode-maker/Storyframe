@@ -7336,8 +7336,7 @@ function buildLocalEvidenceBlock(camera) {
 
   lines.push('OVERRIDE POLICY: If your direct visual analysis contradicts any estimate above, TRUST YOUR VISUAL ANALYSIS. Document overrides in the relevant _detail field.');
   lines.push('=== END LOCAL DATA ===');
-  return lines.join('
-');
+  return lines.join('\n');
 }
 
 function buildAICameraFromParsed(parsed) {
