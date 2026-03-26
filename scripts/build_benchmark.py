@@ -2,7 +2,7 @@
 """
 Multi-Source Benchmark Builder
 ================================
-MovieNet + HuggingFace + HISTORIAN 3개 소스를 합쳐
+MovieNet + HuggingFace + HISTORIAN + AVA Actions 4개 소스를 합쳐
 StoryFrame 벤치마크/dev/holdout 세트를 구축합니다.
 
 사용법:
@@ -12,6 +12,8 @@ StoryFrame 벤치마크/dev/holdout 세트를 구축합니다.
       --historian-dataset    ./historian_tiny \
       --historian-frames     (--extract-frames 플래그 추가 시 ffmpeg 필요) \
       --hf                   (HuggingFace 자동 다운로드) \
+      --ava-annotations      ./ava_train_v2.2.csv \
+      --ava-videos           ./ava_videos \
       --output               ./dataset \
       --benchmark-size 150 \
       --dev-size 700
@@ -125,7 +127,11 @@ def main():
     parser.add_argument("--historian-dataset", default=None,
                         help="HISTORIAN 데이터셋 경로")
     parser.add_argument("--extract-frames", action="store_true",
-                        help="HISTORIAN: ffmpeg로 키프레임 추출")
+                        help="HISTORIAN/AVA: ffmpeg로 키프레임 추출")
+    parser.add_argument("--ava-annotations", default=None,
+                        help="AVA Actions CSV 경로 (ava_train_v2.2.csv 등)")
+    parser.add_argument("--ava-videos", default=None,
+                        help="AVA 영상 디렉터리 (키프레임 추출 시 필요)")
 
     # 세트 크기
     parser.add_argument("--benchmark-size", type=int, default=150)
@@ -142,9 +148,10 @@ def main():
     labels_dir   = output_dir / "labels"
     labels_dir.mkdir(parents=True, exist_ok=True)
 
-    per_source_bench  = args.benchmark_size  // max(1, sum([args.hf, bool(args.movienet_annotations), bool(args.historian_dataset)]))
-    per_source_dev    = args.dev_size        // max(1, sum([args.hf, bool(args.movienet_annotations), bool(args.historian_dataset)]))
-    per_source_hold   = args.holdout_size    // max(1, sum([args.hf, bool(args.movienet_annotations), bool(args.historian_dataset)]))
+    source_count = sum([args.hf, bool(args.movienet_annotations), bool(args.historian_dataset), bool(args.ava_annotations)])
+    per_source_bench  = args.benchmark_size  // max(1, source_count)
+    per_source_dev    = args.dev_size        // max(1, source_count)
+    per_source_hold   = args.holdout_size    // max(1, source_count)
 
     bench_files   = []
     dev_files     = []
@@ -214,6 +221,29 @@ def main():
             if args.extract_frames:
                 script_args.append("--extract-frames")
             run_script(str(scripts_dir / "historian_to_storyframe.py"), script_args)
+            file_list.append(lf)
+
+    # ── AVA ──────────────────────────────────────────────────────────────────
+    if args.ava_annotations:
+        print("\n[소스 4/4] AVA Actions")
+        for split, size, file_list in [
+            ("benchmark", per_source_bench, bench_files),
+            ("dev",       per_source_dev,   dev_files),
+            ("holdout",   per_source_hold,  holdout_files),
+        ]:
+            lf = labels_dir / f"{split}_ava.json"
+            img_dir = output_dir / "curated" / split
+            script_args = [
+                "--annotations", args.ava_annotations,
+                "--output", str(img_dir),
+                "--labels-out", str(lf),
+                "--count", str(size),
+                "--split", split,
+                "--seed", str(args.seed),
+            ]
+            if args.extract_frames and args.ava_videos:
+                script_args += ["--extract-frames", "--videos", args.ava_videos]
+            run_script(str(scripts_dir / "ava_to_storyframe.py"), script_args)
             file_list.append(lf)
 
     # ── 병합 ─────────────────────────────────────────────────────────────────
