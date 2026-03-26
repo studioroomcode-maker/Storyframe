@@ -7,6 +7,7 @@
   "scripts": {
     "start": "node local-app.js",
     "print-url": "node local-app.js --print-url",
-    "build": "node build.js"
+    "build": "node build.js",
+    "benchmark:evaluate": "node scripts/evaluate-benchmark.js"
   }
 }
