@@ -2628,6 +2628,48 @@ select.setting-input {
 .btn-xs.btn-danger { background: var(--danger, #ff4d4f); color: #fff; border-color: transparent; }
 .btn-xs.btn-danger:hover { opacity: 0.85; }
 .cloud-empty { color: var(--text-muted); padding: 32px; text-align: center; font-size: 14px; }
+
+/* ---- 샷 검수 모드 (CineShotCoder 통합) ---- */
+.review-overlay { display: none; position: fixed; inset: 0; z-index: 320; background: var(--bg-primary, #0a0a0c); flex-direction: column; }
+.review-overlay.active { display: flex; }
+.review-topbar { display: flex; align-items: center; gap: 10px; padding: 12px 20px; border-bottom: 1px solid var(--border); background: var(--bg-card); flex-wrap: wrap; }
+.review-title { font-weight: 700; font-size: 15px; }
+.review-sub { color: var(--text-muted); font-size: 12px; flex: 1; min-width: 200px; }
+.review-progress { color: var(--accent); font-size: 13px; font-weight: 600; margin-right: 6px; }
+.review-body { flex: 1; display: flex; overflow: hidden; }
+.review-left { flex: 1; display: flex; flex-direction: column; gap: 12px; padding: 18px 22px; overflow-y: auto; min-width: 0; }
+.review-shot-header { display: flex; align-items: baseline; gap: 14px; }
+.review-shot-no { font-size: 20px; font-weight: 700; }
+.review-shot-meta { color: var(--text-muted); font-size: 13px; font-family: 'JetBrains Mono', monospace; }
+.review-frames { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.review-frame-cell { position: relative; background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; aspect-ratio: 16/9; display: flex; align-items: center; justify-content: center; }
+.review-frame-cell img { width: 100%; height: 100%; object-fit: contain; display: none; }
+.review-frame-tag { position: absolute; top: 6px; left: 8px; z-index: 2; font-size: 10px; color: #ccc; background: rgba(10,10,12,0.72); padding: 2px 7px; border-radius: 4px; }
+.review-frame-empty { color: var(--text-muted); font-size: 12px; }
+.review-hint { color: var(--text-muted); font-size: 12px; }
+.review-timeline { width: 100%; height: 56px; display: block; cursor: pointer; }
+.review-caption { color: var(--text-muted); font-size: 11px; }
+.review-form { width: 360px; flex-shrink: 0; border-left: 1px solid var(--border); background: var(--bg-card); padding: 20px 18px; overflow-y: auto; }
+.review-form-title { font-size: 12px; font-weight: 700; color: var(--text-muted); margin-bottom: 14px; letter-spacing: 0.4px; }
+.review-field-label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); margin: 12px 0 5px; }
+.review-key { margin-left: auto; font-size: 10px; color: var(--text-muted); font-family: 'JetBrains Mono', monospace; opacity: 0.7; }
+.review-pill { font-size: 9px; font-weight: 700; padding: 1px 6px; border-radius: 8px; }
+.pill-auto { background: rgba(88,214,141,0.15); color: #58d68d; }
+.pill-hint { background: rgba(224,177,90,0.15); color: #e0b15a; }
+.pill-human { background: rgba(217,138,120,0.15); color: #d98a78; }
+.review-tc { background: rgba(88,214,141,0.08); color: #58d68d; font-family: 'JetBrains Mono', monospace; font-size: 12px; padding: 8px 10px; border-radius: 6px; }
+.review-select { width: 100%; background: var(--bg-elevated); color: var(--text-primary); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; font-size: 13px; }
+.review-seg { display: flex; gap: 4px; }
+.review-seg button { flex: 1; padding: 8px 4px; background: var(--bg-elevated); border: 1px solid var(--border); color: var(--text-muted); border-radius: 6px; cursor: pointer; font-size: 12px; transition: all 0.15s; }
+.review-seg button:hover { border-color: var(--accent); color: var(--text-primary); }
+.review-seg button.on { background: var(--accent); border-color: var(--accent); color: #0a0a0c; font-weight: 700; }
+.review-nav { display: flex; gap: 8px; margin-top: 18px; }
+.review-nav .btn { flex: 1; justify-content: center; }
+.review-help { color: var(--text-muted); font-size: 10px; line-height: 1.7; margin-top: 14px; font-family: 'JetBrains Mono', monospace; }
+@media (max-width: 900px) {
+  .review-body { flex-direction: column; }
+  .review-form { width: auto; border-left: none; border-top: 1px solid var(--border); }
+}
 </style>
 </head>
 <body>
@@ -2850,6 +2892,7 @@ select.setting-input {
             <div class="benchmark-subtitle">장면 정답을 직접 설정하고 현재 감지와 자동 비교합니다.</div>
           </div>
           <div class="benchmark-actions">
+            <button class="btn" onclick="openReviewMode()" id="benchmarkReviewBtn" disabled title="프레임 3장을 보며 단축키로 정답 라벨을 빠르게 확정합니다" style="border-color:rgba(196,240,77,0.4);color:#c4f04d;">🎬 샷 검수</button>
             <button class="btn" onclick="createBenchmarkFromCurrent()">현재 결과로 초안 만들기</button>
             <button class="btn" onclick="triggerBenchmarkImport()">JSON 불러오기</button>
             <button class="btn" onclick="exportBenchmark()" id="benchmarkExportBtn" disabled>JSON 저장</button>
@@ -3171,6 +3214,64 @@ select.setting-input {
       <button class="btn" onclick="hideGlossary()" style="padding:6px 14px;font-size:12px;">닫기</button>
     </div>
     <div class="glossary-modal-body" id="glossaryBody"></div>
+  </div>
+</div>
+
+<!-- 샷 검수 모드 (CineShotCoder 통합) -->
+<div class="review-overlay" id="reviewOverlay">
+  <div class="review-topbar">
+    <div class="review-title">🎬 샷 검수</div>
+    <div class="review-sub">프레임을 보며 라벨을 확정합니다 — 확정 라벨은 벤치마크 정답이 되어 학습에 사용됩니다</div>
+    <div class="review-progress" id="reviewProgress"></div>
+    <button class="btn" onclick="exportReviewCSV()">📋 검수 CSV</button>
+    <button class="btn" onclick="learnOnly()" style="border-color:rgba(196,240,77,0.4);color:#c4f04d;">✨ 학습시키기</button>
+    <button class="btn" onclick="closeReviewMode()">✕ 닫기</button>
+  </div>
+  <div class="review-body">
+    <div class="review-left">
+      <div class="review-shot-header">
+        <span class="review-shot-no" id="reviewShotNo">샷 1</span>
+        <span class="review-shot-meta" id="reviewShotMeta"></span>
+      </div>
+      <div class="review-frames">
+        <div class="review-frame-cell"><span class="review-frame-tag">시작</span><img id="reviewFrame0" alt="시작 프레임"><span class="review-frame-empty" id="reviewFrameEmpty0">프레임 없음</span></div>
+        <div class="review-frame-cell"><span class="review-frame-tag">중간</span><img id="reviewFrame1" alt="중간 프레임"><span class="review-frame-empty" id="reviewFrameEmpty1">프레임 없음</span></div>
+        <div class="review-frame-cell"><span class="review-frame-tag">끝</span><img id="reviewFrame2" alt="끝 프레임"><span class="review-frame-empty" id="reviewFrameEmpty2">프레임 없음</span></div>
+      </div>
+      <div class="review-hint" id="reviewHint"></div>
+      <canvas id="reviewTimeline" class="review-timeline" onclick="reviewTimelineClick(event)"></canvas>
+      <div class="review-caption">막대 = 샷(높이는 길이) · 초록 = 확정 · 라임 = 현재 · 클릭으로 이동</div>
+    </div>
+    <div class="review-form">
+      <div class="review-form-title">샷 라벨 입력</div>
+
+      <div class="review-field-label">타임코드 / 길이 <span class="review-pill pill-auto">AUTO</span></div>
+      <div class="review-tc" id="reviewTcRO">—</div>
+
+      <div class="review-field-label">샷사이즈 <span class="review-pill pill-hint">HINT</span><span class="review-key">1–8</span></div>
+      <select class="review-select" id="reviewScaleSelect" onchange="setReviewSelect('shotSize', this.value)"></select>
+
+      <div class="review-field-label">프레이밍 <span class="review-pill pill-human">사람</span><span class="review-key">Q W E R T Y U</span></div>
+      <select class="review-select" id="reviewFramingSelect" onchange="setReviewSelect('framing', this.value)"></select>
+
+      <div class="review-field-label">발화 <span class="review-pill pill-human">사람</span><span class="review-key">A B Space</span></div>
+      <div class="review-seg" id="reviewSpeakerSeg"></div>
+
+      <div class="review-field-label">장면 단계 <span class="review-pill pill-human">사람</span><span class="review-key">Z X C V</span></div>
+      <div class="review-seg" id="reviewPhaseSeg"></div>
+
+      <div class="review-field-label">배경 압축감 <span class="review-pill pill-human">사람</span><span class="review-key">, . /</span></div>
+      <div class="review-seg" id="reviewCompSeg"></div>
+
+      <div class="review-field-label">감정 강도 <span class="review-pill pill-human">사람</span><span class="review-key">F1–F5</span></div>
+      <div class="review-seg" id="reviewEmoSeg"></div>
+
+      <div class="review-nav">
+        <button class="btn" onclick="reviewPrev()">← 이전</button>
+        <button class="btn btn-primary" onclick="reviewNext()">다음 →</button>
+      </div>
+      <div class="review-help">입력 즉시 저장 · 단축키: 1–8 샷사이즈 · Q W E R T Y U 프레이밍 · A/B/Space 발화 · Z X C V 단계 · , . / 압축감 · F1–F5 감정 · ←/→ 이동 · Esc 닫기</div>
+    </div>
   </div>
 </div>
 
@@ -3559,9 +3660,9 @@ async function callAI(systemPrompt, parts, maxTokens) {
     method: 'POST',
     headers,
     body: JSON.stringify({
-      model: 'claude-sonnet-4-5',
+      model: 'claude-sonnet-5',
       max_tokens: maxTokens,
-      temperature: 0.3,
+      thinking: { type: 'disabled' },
       system: systemPrompt || undefined,
       messages: [{ role: 'user', content: parts }]
     })
@@ -3572,11 +3673,11 @@ async function callAI(systemPrompt, parts, maxTokens) {
     const errMsg  = data.error?.message || response.statusText;
     throw new Error(`[${errType}] ${errMsg}`);
   }
-  return data.content?.[0]?.text || '';
+  return data.content?.find(b => b.type === 'text')?.text || '';
 }
 
 async function callGeminiRaw(key, systemPrompt, geminiParts, maxTokens) {
-  const model = 'gemini-2.5-flash';
+  const model = 'gemini-flash-latest';
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`;
   const body = {
     ...(systemPrompt ? { system_instruction: { parts: [{ text: systemPrompt }] } } : {}),
@@ -4358,6 +4459,10 @@ function buildBenchmarkSceneFromScene(scene, index) {
     lightingType: canonicalLightingType(scene.camera?.lightingType),
     lightingCondition: canonicalLightingCondition(scene.camera?.lightingCondition),
     composition: canonicalComposition(scene.camera?.composition),
+    speaker: '',
+    phase: '',
+    compression: '',
+    emotion: '',
     notes: ''
   };
 }
@@ -4381,6 +4486,10 @@ function normalizeBenchmarkScene(scene, index) {
     lightingType: canonicalLightingType(scene.lightingType ?? scene.lighting_type ?? scene.camera?.lightingType),
     lightingCondition: canonicalLightingCondition(scene.lightingCondition ?? scene.lighting_condition ?? scene.camera?.lightingCondition),
     composition: canonicalComposition(scene.composition ?? scene.composition_tag ?? scene.camera?.composition),
+    speaker: String(scene.speaker ?? ''),
+    phase: String(scene.phase ?? ''),
+    compression: String(scene.compression ?? ''),
+    emotion: String(scene.emotion ?? ''),
     notes: String(scene.notes ?? scene.note ?? '')
   };
 }
@@ -5052,6 +5161,7 @@ function renderBenchmarkSection() {
   const exportBtn = document.getElementById('benchmarkExportBtn');
   const projectExportBtn = document.getElementById('benchmarkProjectExportBtn');
   const learnBtn = document.getElementById('benchmarkLearnBtn');
+  const reviewBtn = document.getElementById('benchmarkReviewBtn');
   const headerBtn = document.getElementById('headerBenchmarkBtn');
 
   const visible = scenes.length > 0 || !!benchmarkData?.scenes?.length;
@@ -5061,6 +5171,7 @@ function renderBenchmarkSection() {
   exportBtn.disabled = !benchmarkData?.scenes?.length;
   if (projectExportBtn) projectExportBtn.disabled = !scenes.length;
   if (learnBtn) learnBtn.disabled = !benchmarkData?.scenes?.length || !scenes.length;
+  if (reviewBtn) reviewBtn.disabled = !scenes.length;
   renderBenchmarkTableHead();
   renderBenchmarkSummary();
   renderLearningStats();
@@ -9942,8 +10053,9 @@ ${scene.multiFrames ? '3媛??꾨젅?꾩쓽 李⑥씠瑜?硫대???鍮꾧탳?섏�
         method: 'POST',
         headers: headers,
         body: JSON.stringify({
-          model: 'claude-sonnet-4-5',
-          max_tokens: 1500,
+          model: 'claude-sonnet-5',
+          max_tokens: 2048,
+          thinking: { type: 'disabled' },
           system: systemPrompt,
           messages: [{
             role: 'user',
@@ -9971,9 +10083,10 @@ ${scene.multiFrames ? '3媛??꾨젅?꾩쓽 李⑥씠瑜?硫대???鍮꾧탳?섏�
         throw new Error(errMsg);
       }
       
-      if (data.content && data.content[0]) {
+      const aiTextBlock = data.content?.find(b => b.type === 'text');
+      if (aiTextBlock) {
         try {
-          const text = data.content[0].text;
+          const text = aiTextBlock.text;
           const cleaned = text.replace(/```json|```/g, '').trim();
           const parsed = JSON.parse(cleaned);
           scene.description = parsed.description || '';
@@ -10012,7 +10125,7 @@ ${scene.multiFrames ? '3媛??꾨젅?꾩쓽 李⑥씠瑜?硫대???鍮꾧탳?섏�
           debugLog(`?λ㈃ ${i+1} 遺꾩꽍 ?꾨즺: ${parsed.shot_size} / ${parsed.lens_type} / ${parsed.camera_movement} (conf: ${((parsed.shot_size_confidence||0)*100).toFixed(0)}%/${((parsed.lens_confidence||0)*100).toFixed(0)}%/${((parsed.movement_confidence||0)*100).toFixed(0)}%)`, 'success');
         } catch (parseErr) {
           // If JSON parse fails, keep the raw description but retain local camera analysis.
-          scene.description = data.content[0].text;
+          scene.description = aiTextBlock.text;
           try { scene.camera = await analyzeFrameAdvanced(scene); }
           catch(e) { scene.camera = generateLocalCamera(); }
         }
@@ -10234,7 +10347,7 @@ async function generateAIDescriptions() {
       const rawText = await callAI(
         systemPrompt,
         [...imageContents, { type: 'text', text: analysisPrompt }],
-        1500
+        2048
       );
       debugLog(`Scene ${i + 1}: AI response received`, 'success');
 
@@ -10884,7 +10997,7 @@ ${formatPrompts[format]}
     
     document.getElementById('scenarioLoadingSub').textContent = 'AI에 시나리오 작성을 요청하는 중...';
     
-    const rawText = await callAI('', [{ type: 'text', text: prompt }], 4000);
+    const rawText = await callAI('', [{ type: 'text', text: prompt }], 6000);
     if (rawText) {
       currentScenario = rawText;
       body.innerHTML = renderMarkdown(currentScenario);
@@ -14108,6 +14221,242 @@ async function _saveLearningDBToCloud(db) {
     { user_id: currentUser.id, learning_db: db, updated_at: new Date().toISOString() },
     { onConflict: 'user_id' }
   );
+}
+
+// ================================================================
+//  샷 검수 모드 (CineShotCoder 통합)
+//  자동 분석 결과를 프레임 3장(시작/중간/끝)을 보며 단축키로 확정.
+//  확정 라벨은 벤치마크 정답(benchmarkData)에 바로 기록되어
+//  "학습시키기"·"현재 감지와 비교"·JSON 저장과 그대로 연동된다.
+// ================================================================
+const REVIEW_SCALES = ['ELS', 'LS', 'FS', 'MLS', 'MS', 'MCU', 'CU', 'ECU']; // 단축키 1~8
+const REVIEW_FRAMING_KEYMAP = { q: 'Single', w: 'Two-shot', e: 'Three-shot', r: 'OTS', t: 'POV', y: 'Crowd', u: 'Empty' };
+const REVIEW_SPEAKERS = [['A', 'A 발화'], ['B', 'B 발화'], ['-', '무발화']];
+const REVIEW_PHASES = [['opening', '도입'], ['development', '전개'], ['escalation', '고조'], ['peak', '절정']];
+const REVIEW_COMPS = ['약', '중', '강'];
+const REVIEW_EMOS = ['1', '2', '3', '4', '5'];
+
+let reviewOpen = false;
+let reviewIdx = 0;
+let reviewMatches = [];      // benchmarkData.scenes[i] ↔ 감지 씬 (프레임/힌트 표시용)
+let _reviewTlRects = [];
+let _reviewFormBuilt = false;
+
+function openReviewMode() {
+  if (!scenes.length) { showToast('먼저 스토리보드를 생성해주세요.'); return; }
+  if (!benchmarkData?.scenes?.length) createBenchmarkFromCurrent();
+  if (!benchmarkData?.scenes?.length) return;
+  const usedIndices = new Set();
+  reviewMatches = benchmarkData.scenes.map(b => {
+    const m = findBestDetectedSceneMatch(b, scenes, usedIndices);
+    if (m) usedIndices.add(m.detectedIndex);
+    return m?.scene || null;
+  });
+  reviewIdx = Math.min(reviewIdx, benchmarkData.scenes.length - 1);
+  reviewOpen = true;
+  buildReviewForm();
+  document.getElementById('reviewOverlay').classList.add('active');
+  renderReview();
+}
+
+function closeReviewMode() {
+  reviewOpen = false;
+  document.getElementById('reviewOverlay').classList.remove('active');
+  if (benchmarkData) benchmarkData.updatedAt = new Date().toISOString();
+  renderBenchmarkSection();
+}
+
+function buildReviewForm() {
+  if (_reviewFormBuilt) return;
+  _reviewFormBuilt = true;
+  document.getElementById('reviewScaleSelect').innerHTML =
+    BENCHMARK_OPTIONS.shotSizes.map(v => `<option value="${v}">${v || '— 선택 —'}</option>`).join('');
+  document.getElementById('reviewFramingSelect').innerHTML =
+    BENCHMARK_OPTIONS.framings.map(v => `<option value="${v}">${v || '— 선택 —'}</option>`).join('');
+  _buildReviewSeg('reviewSpeakerSeg', 'speaker', REVIEW_SPEAKERS);
+  _buildReviewSeg('reviewPhaseSeg', 'phase', REVIEW_PHASES);
+  _buildReviewSeg('reviewCompSeg', 'compression', REVIEW_COMPS.map(v => [v, v]));
+  _buildReviewSeg('reviewEmoSeg', 'emotion', REVIEW_EMOS.map(v => [v, v]));
+}
+
+function _buildReviewSeg(containerId, field, pairs) {
+  document.getElementById(containerId).innerHTML = pairs.map(([val, label]) =>
+    `<button type="button" data-val="${val}" onclick="toggleReviewField('${field}', this.dataset.val)">${label}</button>`
+  ).join('');
+}
+
+function _reviewCur() {
+  return benchmarkData?.scenes?.[reviewIdx] || null;
+}
+
+function isReviewDone(b) {
+  return !!(b && b.shotSize && b.framing && b.speaker && b.phase);
+}
+
+function toggleReviewField(field, val) {
+  const b = _reviewCur();
+  if (!b) return;
+  b[field] = (b[field] === val) ? '' : val;
+  renderReview();
+}
+
+function setReviewSelect(field, val) {
+  const b = _reviewCur();
+  if (!b) return;
+  b[field] = val;
+  renderReview();
+}
+
+function renderReview() {
+  const b = _reviewCur();
+  if (!b) return;
+  const d = reviewMatches[reviewIdx];
+  const dur = Math.max(b.endTime - b.startTime, 0);
+
+  document.getElementById('reviewShotNo').textContent = `샷 ${reviewIdx + 1}`;
+  document.getElementById('reviewShotMeta').textContent =
+    `${formatTimecode(b.startTime)} – ${formatTimecode(b.endTime)} · ${dur.toFixed(1)}s`;
+  document.getElementById('reviewTcRO').textContent =
+    `${formatTimecode(b.startTime)} → ${formatTimecode(b.endTime)} · ${dur.toFixed(1)}s`;
+
+  const frames = d?.multiFrames?.length ? d.multiFrames : (d?.image ? [d.image] : []);
+  for (let i = 0; i < 3; i++) {
+    const img = document.getElementById(`reviewFrame${i}`);
+    const empty = document.getElementById(`reviewFrameEmpty${i}`);
+    const src = frames.length ? frames[Math.min(i, frames.length - 1)] : null;
+    if (src) {
+      img.src = src;
+      img.style.display = 'block';
+      empty.style.display = 'none';
+    } else {
+      img.removeAttribute('src');
+      img.style.display = 'none';
+      empty.style.display = 'block';
+    }
+  }
+
+  const cam = d?.camera || {};
+  const hints = [];
+  if (cam.shotSize) hints.push(`샷사이즈 ${canonicalShotSize(cam.shotSize) || cam.shotSize}`);
+  if (cam.framing) hints.push(`프레이밍 ${canonicalFraming(cam.framing) || cam.framing}`);
+  if (cam.movement) hints.push(`무빙 ${cam.movement}`);
+  document.getElementById('reviewHint').textContent = hints.length
+    ? `자동 감지 힌트: ${hints.join(' · ')}   (참고용 — 직접 확정하세요)`
+    : '자동 감지 힌트 없음 — 직접 입력하세요.';
+
+  document.getElementById('reviewScaleSelect').value = b.shotSize || '';
+  document.getElementById('reviewFramingSelect').value = b.framing || '';
+  _refreshReviewSeg('reviewSpeakerSeg', b.speaker);
+  _refreshReviewSeg('reviewPhaseSeg', b.phase);
+  _refreshReviewSeg('reviewCompSeg', b.compression);
+  _refreshReviewSeg('reviewEmoSeg', b.emotion);
+
+  drawReviewTimeline();
+  const done = benchmarkData.scenes.filter(isReviewDone).length;
+  document.getElementById('reviewProgress').textContent = `${done} / ${benchmarkData.scenes.length} 확정`;
+}
+
+function _refreshReviewSeg(containerId, val) {
+  document.querySelectorAll(`#${containerId} button`).forEach(btn => {
+    btn.classList.toggle('on', !!val && btn.dataset.val === val);
+  });
+}
+
+function drawReviewTimeline() {
+  const canvas = document.getElementById('reviewTimeline');
+  const w = canvas.clientWidth || 800;
+  canvas.width = w;
+  canvas.height = 56;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, w, 56);
+  const rows = benchmarkData?.scenes || [];
+  const n = rows.length;
+  if (!n) return;
+  const gap = 3;
+  const bw = Math.max(3, (w - gap * (n - 1)) / n);
+  _reviewTlRects = [];
+  rows.forEach((r, i) => {
+    const x0 = i * (bw + gap);
+    const len = Math.max(r.endTime - r.startTime, 0.2);
+    const h = Math.max(12, Math.min(48, 12 + len * 4));
+    const y0 = 54 - h;
+    ctx.fillStyle = isReviewDone(r) ? '#58d68d' : (i === reviewIdx ? '#c4f04d' : 'rgba(255,255,255,0.12)');
+    ctx.fillRect(x0, y0, bw, h);
+    if (i === reviewIdx) {
+      ctx.strokeStyle = '#c4f04d';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x0 + 1, y0 + 1, Math.max(bw - 2, 1), Math.max(h - 2, 1));
+    }
+    _reviewTlRects.push([x0, x0 + bw]);
+  });
+}
+
+function reviewTimelineClick(ev) {
+  const rect = ev.target.getBoundingClientRect();
+  const x = ev.clientX - rect.left;
+  const hit = _reviewTlRects.findIndex(([x0, x1]) => x >= x0 && x <= x1);
+  if (hit >= 0) { reviewIdx = hit; renderReview(); }
+}
+
+function reviewNext() {
+  if (benchmarkData?.scenes && reviewIdx < benchmarkData.scenes.length - 1) { reviewIdx++; renderReview(); }
+}
+
+function reviewPrev() {
+  if (reviewIdx > 0) { reviewIdx--; renderReview(); }
+}
+
+document.addEventListener('keydown', ev => {
+  if (!reviewOpen) return;
+  const t = ev.target;
+  if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')) return;
+  const k = ev.key;
+  if (k === 'Escape') { closeReviewMode(); return; }
+  if (k === 'ArrowRight' || k === 'Enter') { ev.preventDefault(); reviewNext(); return; }
+  if (k === 'ArrowLeft') { ev.preventDefault(); reviewPrev(); return; }
+  if (/^[1-8]$/.test(k)) { setReviewSelect('shotSize', REVIEW_SCALES[parseInt(k, 10) - 1]); return; }
+  if (k === ' ') { ev.preventDefault(); toggleReviewField('speaker', '-'); return; }
+  if (/^F[1-5]$/.test(k)) { ev.preventDefault(); toggleReviewField('emotion', k.slice(1)); return; }
+  if (k === ',') { toggleReviewField('compression', '약'); return; }
+  if (k === '.') { toggleReviewField('compression', '중'); return; }
+  if (k === '/') { toggleReviewField('compression', '강'); return; }
+  const low = k.toLowerCase();
+  if (low === 'a' || low === 'b') { toggleReviewField('speaker', low.toUpperCase()); return; }
+  if (low === 'z') { toggleReviewField('phase', 'opening'); return; }
+  if (low === 'x') { toggleReviewField('phase', 'development'); return; }
+  if (low === 'c') { toggleReviewField('phase', 'escalation'); return; }
+  if (low === 'v') { toggleReviewField('phase', 'peak'); return; }
+  if (REVIEW_FRAMING_KEYMAP[low]) { setReviewSelect('framing', REVIEW_FRAMING_KEYMAP[low]); return; }
+});
+
+function exportReviewCSV() {
+  if (!benchmarkData?.scenes?.length) { showToast('내보낼 검수 데이터가 없습니다.'); return; }
+  const fields = ['scene_id', 'shot_no', 'tc_in', 'tc_out', 'len_sec', 'n_face',
+                  'shot_scale', 'framing', 'speaker', 'phase', 'compression',
+                  'emotion', 'lens_mm', 'lens_conf'];
+  const sceneId = (videoFile?.name || benchmarkData.video?.name || 'S01').replace(/\.[^.]+$/, '') || 'S01';
+  const rows = benchmarkData.scenes.map((b, i) => ({
+    scene_id: sceneId,
+    shot_no: i + 1,
+    tc_in: formatTimecode(b.startTime),
+    tc_out: formatTimecode(b.endTime),
+    len_sec: Math.max(b.endTime - b.startTime, 0).toFixed(2),
+    n_face: '',
+    shot_scale: b.shotSize || '',
+    framing: b.framing || '',
+    speaker: b.speaker || '',
+    phase: b.phase || '',
+    compression: b.compression || '',
+    emotion: b.emotion || '',
+    lens_mm: '',
+    lens_conf: ''
+  }));
+  const esc = v => `"${String(v).replace(/"/g, '""')}"`;
+  const csv = String.fromCharCode(0xFEFF) + [fields.join(','), ...rows.map(r => fields.map(f => esc(r[f])).join(','))].join('\n');
+  const base = sceneId.replace(/[^\w가-힣.-]+/g, '_') || 'storyframe';
+  downloadBlob(csv, `${base}_검수.csv`, 'text/csv;charset=utf-8');
+  const done = benchmarkData.scenes.filter(isReviewDone).length;
+  showToast(`검수 CSV 저장 완료 · 확정 ${done}/${benchmarkData.scenes.length}샷`);
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────
