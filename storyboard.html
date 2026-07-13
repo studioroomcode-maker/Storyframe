@@ -3576,8 +3576,10 @@ function detectEnvironment() {
   // claude.ai artifacts run inside an iframe on specific domains
   try {
     const host = window.location.hostname;
-    // In claude.ai artifact, the API proxy handles auth automatically
-    if (host.includes('claude.ai') || host.includes('anthropic.com') || host === '') {
+    // In claude.ai artifact, the API proxy handles auth automatically.
+    // file:// 로 직접 열면 hostname이 ''라 claude.ai로 오탐하므로 프로토콜을 함께 확인.
+    if (window.location.protocol !== 'file:'
+        && (host.includes('claude.ai') || host.includes('anthropic.com') || host === '')) {
       isClaudeAI = true;
     }
   } catch(e) {
@@ -3597,7 +3599,7 @@ function updateApiKeyStatus() {
 
   userApiKey = inputEl ? inputEl.value.trim() : '';
 
-  if (isClaudeAI) {
+  if (isClaudeAI && provider !== 'gemini') {
     statusEl.innerHTML = '<span class="api-status-auto">✅ claude.ai 자동 연결</span>';
     if (hintEl)  hintEl.style.display  = 'none';
     if (inputEl) inputEl.placeholder = '자동 연결됨 (입력 불필요)';
@@ -3632,9 +3634,10 @@ function getApiHeaders() {
 function isAIAvailable() {
   const provider = document.getElementById('aiMode')?.value || 'on';
   if (provider === 'local') return false;
-  if (isClaudeAI) return true;
   const key = document.getElementById('apiKeyInput').value.trim();
+  // Gemini는 claude.ai 환경이라도 자체 키가 반드시 필요
   if (provider === 'gemini') return key.length > 20;
+  if (isClaudeAI) return true;
   return key.startsWith('sk-');
 }
 
@@ -5660,9 +5663,30 @@ async function captureSceneFrameSet(video, startTime, endTime) {
     multiFrames.push(captureVideoFrameImage(video, 720, 0.82));
   }
 
+  // 카메라 무빙 전용 프레임: 장면 중앙 부근 0.35초 간격 조밀 샘플링.
+  // multiFrames(장면 전체에 3장)는 간격이 너무 넓어 카메라 움직임 추정에 부적합하다.
+  const MOTION_GAP_SEC = 0.35;
+  const mid = (startTime + endTime) / 2;
+  const denseTimes = [...new Set(
+    [-2.5, -1.5, -0.5, 0.5, 1.5, 2.5]
+      .map(k => clamp(mid + k * MOTION_GAP_SEC, startTime + 0.04, Math.max(endTime - 0.06, startTime + 0.04)))
+      .map(t => t.toFixed(3))
+  )].map(Number).sort((a, b) => a - b);
+  const motionFrames = [];
+  let motionSpanSec = 0;
+  if (denseTimes.length >= 2) {
+    for (const time of denseTimes) {
+      await seekVideo(video, time);
+      motionFrames.push(captureVideoFrameImage(video, 384, 0.75));
+    }
+    motionSpanSec = denseTimes[denseTimes.length - 1] - denseTimes[0];
+  }
+
   return {
     image,
     multiFrames,
+    motionFrames,
+    motionSpanSec,
     keyframeTime,
     brightness: best ? best.metrics.brightness : 0.5,
     colorDominant: best ? best.metrics.colorDominant : ''
@@ -5701,6 +5725,8 @@ async function generateStoryboard() {
           keyframeTime: frameSet.keyframeTime,
           image: frameSet.image,
           multiFrames: frameSet.multiFrames,
+          motionFrames: frameSet.motionFrames,
+          motionSpanSec: frameSet.motionSpanSec,
           transition: sc.transition,
           score: sc.score,
           description: '',
@@ -5718,7 +5744,7 @@ async function generateStoryboard() {
     updateProgress('트랜지션 컨텍스트 분석 중...', 82);
     await applySceneContextTransitions(scenes);
 
-    if (aiMode === 'on') {
+    if (aiMode === 'on' || aiMode === 'gemini') {
       updateProgress('AI 장면 설명 생성 중...', 80);
       await generateAIDescriptions();
     } else {
@@ -6092,10 +6118,70 @@ function getFaceDetector() {
   return faceDetectorInstance;
 }
 
+// MediaPipe 얼굴 감지 (브라우저 내 WASM 실행, API 키 불필요)
+// window.FaceDetector(Shape Detection API)는 크롬 실험 플래그가 필요해 사실상 항상 비활성이므로
+// 포즈 감지와 같은 tasks-vision 번들의 FaceDetector를 1차 감지기로 사용한다.
+let mpFaceDetectorInstance = null;
+let mpFaceDetectorPromise = null;
+let mpFaceDetectorUnavailable = false;
+const MP_FACE_MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/latest/blaze_face_short_range.tflite';
+
+async function getMpFaceDetector() {
+  if (mpFaceDetectorUnavailable) return null;
+  if (mpFaceDetectorInstance) return mpFaceDetectorInstance;
+  if (mpFaceDetectorPromise) return mpFaceDetectorPromise;
+
+  mpFaceDetectorPromise = (async () => {
+    try {
+      const vision = await import(`https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${POSE_TASKS_VERSION}/vision_bundle.mjs`);
+      const resolver = await vision.FilesetResolver.forVisionTasks(POSE_WASM_ROOT);
+      mpFaceDetectorInstance = await vision.FaceDetector.createFromOptions(resolver, {
+        baseOptions: { modelAssetPath: MP_FACE_MODEL_URL },
+        runningMode: 'IMAGE',
+        minDetectionConfidence: 0.5
+      });
+      return mpFaceDetectorInstance;
+    } catch (err) {
+      console.warn('MediaPipe FaceDetector unavailable, falling back to Shape Detection API.', err);
+      mpFaceDetectorUnavailable = true;
+      mpFaceDetectorInstance = null;
+      return null;
+    }
+  })();
+
+  return mpFaceDetectorPromise;
+}
+
+function buildFaceAnalysis(boxes) {
+  boxes = boxes.filter(box => box.width > 0 && box.height > 0).sort((a, b) => b.area - a.area);
+  if (!boxes.length) return null;
+
+  let framing = 'Single';
+  if (boxes.length === 2) framing = 'Two-shot';
+  else if (boxes.length === 3) framing = 'Three-shot';
+  else if (boxes.length > 3) framing = 'Crowd';
+
+  const edgeFace = boxes.find(box => box.area > 0.035 && (box.x < 0.08 || (box.x + box.width) > 0.92));
+  const centerFace = boxes.find(box => box.cx > 0.28 && box.cx < 0.72);
+  if (edgeFace && centerFace && boxes.length >= 2) framing = 'OTS';
+
+  const largest = boxes[0];
+  return {
+    supported: true,
+    count: boxes.length,
+    framing,
+    confidence: clamp(0.58 + Math.min(largest.area * 1.6, 0.24) + Math.min(boxes.length, 3) * 0.04, 0.58, 0.92),
+    largestAreaRatio: largest.area,
+    maxHeightRatio: largest.height,
+    subjectCenterX: largest.cx,
+    subjectCenterY: largest.cy,
+    boxes
+  };
+}
+
 async function analyzeFaces(source, w, h) {
-  const detector = getFaceDetector();
   const fallback = {
-    supported: !!detector,
+    supported: false,
     count: 0,
     framing: 'Empty',
     confidence: 0,
@@ -6105,11 +6191,40 @@ async function analyzeFaces(source, w, h) {
     subjectCenterY: 0.5,
     boxes: []
   };
+
+  // 1차: MediaPipe FaceDetector (모든 브라우저, 로컬 WASM)
+  const mp = await getMpFaceDetector();
+  if (mp) {
+    try {
+      const result = mp.detect(source);
+      const detections = result?.detections || [];
+      const boxes = detections.map(det => {
+        const bb = det.boundingBox;
+        const width = bb.width / w;
+        const height = bb.height / h;
+        return {
+          x: bb.originX / w,
+          y: bb.originY / h,
+          width,
+          height,
+          area: width * height,
+          cx: (bb.originX + bb.width / 2) / w,
+          cy: (bb.originY + bb.height / 2) / h
+        };
+      });
+      return buildFaceAnalysis(boxes) || { ...fallback, supported: true };
+    } catch (err) {
+      console.debug('MediaPipe face detect failed, trying Shape Detection API:', err);
+    }
+  }
+
+  // 2차: Shape Detection API (크롬 실험 플래그 환경에서만 존재)
+  const detector = getFaceDetector();
   if (!detector) return fallback;
 
   try {
     const faces = await detector.detect(source);
-    if (!faces || !faces.length) return fallback;
+    if (!faces || !faces.length) return { ...fallback, supported: true };
 
     const boxes = faces.map(face => {
       const box = face.boundingBox || face;
@@ -6124,29 +6239,8 @@ async function analyzeFaces(source, w, h) {
         cx: (box.x + box.width / 2) / w,
         cy: (box.y + box.height / 2) / h
       };
-    }).sort((a, b) => b.area - a.area);
-
-    let framing = 'Single';
-    if (boxes.length === 2) framing = 'Two-shot';
-    else if (boxes.length === 3) framing = 'Three-shot';
-    else if (boxes.length > 3) framing = 'Crowd';
-
-    const edgeFace = boxes.find(box => box.area > 0.035 && (box.x < 0.08 || (box.x + box.width) > 0.92));
-    const centerFace = boxes.find(box => box.cx > 0.28 && box.cx < 0.72);
-    if (edgeFace && centerFace && boxes.length >= 2) framing = 'OTS';
-
-    const largest = boxes[0];
-    return {
-      supported: true,
-      count: boxes.length,
-      framing,
-      confidence: clamp(0.58 + Math.min(largest.area * 1.6, 0.24) + Math.min(boxes.length, 3) * 0.04, 0.58, 0.92),
-      largestAreaRatio: largest.area,
-      maxHeightRatio: largest.height,
-      subjectCenterX: largest.cx,
-      subjectCenterY: largest.cy,
-      boxes
-    };
+    });
+    return buildFaceAnalysis(boxes) || { ...fallback, supported: true };
   } catch (err) {
     return fallback;
   }
@@ -7911,6 +8005,8 @@ async function analyzeFrameAdvanced(scene) {
   let lighting = estimateLighting(colorAnalysis, composition, faceAnalysis, edgeMap, pixels, w, h, poseAnalysis, contentMode);
 
   // #2: multiFrames 3???ㅼ닔寃??ы몴
+  const angleVotes = [];   // populated inside multiFrames loop; applied after estimateAngle
+  const lensVotes  = [];   // populated inside multiFrames loop; applied after estimateLens
   if (scene.multiFrames && scene.multiFrames.length >= 2) {
     try {
       const vCanvas = document.createElement('canvas');
@@ -7918,8 +8014,6 @@ async function analyzeFrameAdvanced(scene) {
       const votes = [shotSize.type];
       const compositionResults = [compositionTag];
       const lightingResults = [lighting];
-      const angleVotes = [];   // populated inside loop; applied after estimateAngle
-      const lensVotes  = [];   // populated inside loop; applied after estimateLens
       const compositionScoreTotals = Object.entries(compositionTag.scores || {}).reduce((acc, [label, score]) => {
         acc[label] = score;
         return acc;
@@ -8892,20 +8986,24 @@ function estimateShotSize(composition, edgeMap, w, h, focus, faceAnalysis, poseA
 
 // Research-guided overrides for the remaining camera attributes.
 async function estimateMotion(scene) {
-  if (!scene.multiFrames || scene.multiFrames.length < 2 || scene.duration < 0.25) {
+  // 전용 모션 프레임(0.35초 간격 조밀 샘플) 우선, 없으면 multiFrames 폴백
+  const srcFrames = (scene.motionFrames && scene.motionFrames.length >= 2)
+    ? scene.motionFrames
+    : scene.multiFrames;
+  if (!srcFrames || srcFrames.length < 2 || scene.duration < 0.25) {
     return { type: 'Static', confidence: 0.45, detail: 'Not enough comparison frames were available, so motion defaults to Static.', direction: null, speed: 'none', smoothness: 1.0 };
   }
 
   try {
     const COARSE_W = 64;
     const FINE_W   = 128;
-    const MAX_FRAMES = Math.min(5, scene.multiFrames.length);
+    const MAX_FRAMES = Math.min(6, srcFrames.length);
 
     const coarseFrames = [], fineFrames = [], subjects = [], sharpnessVals = [];
     let motionBlurDir = null;
 
     for (let fi = 0; fi < MAX_FRAMES; fi++) {
-      const src = scene.multiFrames[fi];
+      const src = srcFrames[fi];
       const img = new Image();
       img.src = src;
       await new Promise((res, rej) => { img.onload = res; img.onerror = rej; });
@@ -9023,7 +9121,10 @@ async function estimateMotion(scene) {
       const gain = fBase > 0 ? (fBase - bF.err) / fBase : 0;
       return {
         dx: bF.dx / sf, dy: bF.dy / sf, scale: bF.sc, rot: bF.rot,
-        error: bF.err / 255, gain, scaleDelta: bF.sc - 1,
+        error: bF.err / 255, gain,
+        // 부호 규약: cmpT는 frame2를 1/sc로 샘플링하므로 줌인(피사체 확대)일 때 sc < 1이 나온다.
+        // scaleDelta > 0 = 줌인(화각 좁아짐)이 되도록 부호를 뒤집는다.
+        scaleDelta: 1 - bF.sc,
         magnitude: Math.hypot(bF.dx / sf, bF.dy / sf)
       };
     };
@@ -9032,6 +9133,13 @@ async function estimateMotion(scene) {
     for (let i = 0; i < coarseFrames.length - 1; i++) {
       pairs.push(estimatePair(coarseFrames[i], coarseFrames[i+1], fineFrames[i], fineFrames[i+1]));
     }
+
+    // First-vs-last comparison: slow moves are invisible between adjacent dense
+    // frames (0.35s apart) but accumulate a clear shift across the whole span.
+    const endpointEst = coarseFrames.length >= 3
+      ? estimatePair(coarseFrames[0], coarseFrames[coarseFrames.length - 1],
+                     fineFrames[0], fineFrames[fineFrames.length - 1])
+      : null;
 
     // ?? Aggregate statistics ?????????????????????????????????????????????????
     const N = pairs.length;
@@ -9153,9 +9261,52 @@ async function estimateMotion(scene) {
 
     // ?? Classification cascade ????????????????????????????????????????????????
 
+    // Slow-drift evidence: endpoint pair shows a coherent shift/scale that the
+    // adjacent pairs are too finely spaced to resolve.
+    const slowDrift = endpointEst && endpointEst.gain > 0.06 && avgResidual < 0.12 && (
+      Math.hypot(endpointEst.dx, endpointEst.dy) >= 1.7 || Math.abs(endpointEst.scaleDelta) >= 0.03
+    );
+
     // Static
-    if (avgMagnitude < 0.7 && avgResidual < 0.07 && avgAbsScale < 0.018) {
+    if (avgMagnitude < 0.7 && avgResidual < 0.07 && avgAbsScale < 0.018 && !slowDrift) {
       return { type: 'Static', confidence: 0.88, detail: 'Inter-frame motion stays near zero, which is most consistent with a locked-off shot.', direction: null, speed: 'none', smoothness: 1.0 };
+    }
+
+    // Slow move (visible only across the full sampled span)
+    if (slowDrift && avgMagnitude < 1.1) {
+      const eDx = endpointEst.dx, eDy = endpointEst.dy, eSc = endpointEst.scaleDelta;
+      const conf = clamp(0.55 + endpointEst.gain * 0.6, 0.55, 0.82);
+      if (Math.abs(eSc) >= 0.03 && Math.abs(eSc) * 40 > Math.hypot(eDx, eDy)) {
+        const inward = eSc > 0;
+        return { type: inward ? 'Push-in' : 'Pull-out', confidence: conf,
+          detail: `Adjacent frames look still, but the full span shows a gradual ${(Math.abs(eSc) * 100).toFixed(1)}% scale ${inward ? 'increase' : 'decrease'} — a slow ${inward ? 'push-in' : 'pull-out'}.`,
+          direction: inward ? 'in' : 'out', speed: 'slow', smoothness };
+      }
+      if (Math.abs(eDx) > Math.abs(eDy) * 1.4) {
+        const dir = eDx > 0 ? 'right' : 'left';
+        if (subjectPresent && subStableXY) {
+          return { type: 'Trucking', confidence: clamp(conf - 0.03, 0.52, 0.80),
+            detail: `The subject holds position while the background drifts slowly ${dir} across the span — a slow trucking move.`,
+            direction: dir, speed: 'slow', smoothness };
+        }
+        return { type: 'Pan', confidence: conf,
+          detail: `Adjacent frames look still, but the full span shows a coherent horizontal drift (${eDx.toFixed(1)}px ${dir}) — a slow pan.`,
+          direction: dir, speed: 'slow', smoothness };
+      }
+      if (Math.abs(eDy) > Math.abs(eDx) * 1.4) {
+        const dir = eDy > 0 ? 'down' : 'up';
+        return { type: 'Tilt', confidence: conf,
+          detail: `Adjacent frames look still, but the full span shows a coherent vertical drift (${dir}) — a slow tilt.`,
+          direction: dir, speed: 'slow', smoothness };
+      }
+      if (subjectPresent && subStableXY) {
+        return { type: 'Tracking', confidence: clamp(conf - 0.03, 0.52, 0.80),
+          detail: 'The subject stays framed while the background drifts slowly on both axes — a slow tracking move.',
+          direction: dirLabel(eDx, eDy), speed: 'slow', smoothness };
+      }
+      return { type: 'Steadicam', confidence: clamp(conf - 0.05, 0.50, 0.78),
+        detail: 'A slow, smooth multi-axis drift accumulates across the span, which fits a steadicam-style move.',
+        direction: dirLabel(eDx, eDy), speed: 'slow', smoothness };
     }
 
     // Rack-focus (focus plane shift, camera locked)
@@ -9494,12 +9645,6 @@ function estimateAngle(composition, color, w, h, faceAnalysis, poseAnalysis, edg
   // isAnimScene: only cel (2D) animation has unreliable sky/ground/foreshortening signals.
   // CG animation uses simulated real-world lighting and perspective, so signals remain valid.
   const isAnimScene = contentMode && contentMode.isAnimation && contentMode.isCelAnim && contentMode.confidence > 0.40;
-  const effSkyLikely    = isAnimScene ? false : skyLikely;
-  const effGroundLikely = isAnimScene ? false : groundLikely;
-  // Dampen vertBias for animation (keep 30% to preserve mild composition cues)
-  const effVertBias     = isAnimScene ? vertBias * 0.30 : vertBias;
-  // faceToBody foreshortening is meaningless for animated characters
-  const effFaceToBody   = isAnimScene ? 0.35 : faceToBody;  // 0.35 = neutral (neither low nor high)
 
   const shotType = shotSize?.type || shotSize || '';
   const subject  = getPrimarySubject(faceAnalysis, poseAnalysis);
@@ -9546,6 +9691,14 @@ function estimateAngle(composition, color, w, h, faceAnalysis, poseAnalysis, edg
   // Low angle ??see under-chin ??small face relative to body (< 0.25)
   // High angle ??see top-of-head ??large face relative to body (> 0.55)
   const faceToBody = subjectSize > 0.06 ? faceH / subjectSize : 0.35;
+
+  // P2-1: Animation-safe effective signals (must come after the raw signal declarations above).
+  const effSkyLikely    = isAnimScene ? false : skyLikely;
+  const effGroundLikely = isAnimScene ? false : groundLikely;
+  // Dampen vertBias for animation (keep 30% to preserve mild composition cues)
+  const effVertBias     = isAnimScene ? vertBias * 0.30 : vertBias;
+  // faceToBody foreshortening is meaningless for animated characters
+  const effFaceToBody   = isAnimScene ? 0.35 : faceToBody;  // 0.35 = neutral (neither low nor high)
 
   // ?? 4. Dutch angle ??multi-signal score ??????????????????????????????????
   const lrLeft  = composition.regions[0].brightness + composition.regions[3].brightness + composition.regions[6].brightness;
@@ -14046,7 +14199,7 @@ async function signOut() {
 
 // ── Cloud Save / Load ─────────────────────────────────────────────────────────
 function _compressSceneForCloud(s) {
-  const { multiFrames, _features, ...rest } = s;
+  const { multiFrames, motionFrames, _features, ...rest } = s;
   // camera._features(학습 특징 벡터)는 유지 — 저장 후 로드해도 학습 기능 동작 필요
   // 썸네일 압축 (160×90, JPEG 50%)
   if (rest.image && rest.image.startsWith('data:image') && rest.image.length > 30000) {
