@@ -2758,8 +2758,9 @@ select.setting-input {
         <div class="setting-group">
           <label class="setting-label">최소 장면 길이</label>
           <select class="setting-input" id="minScene">
-            <option value="0.5">0.5초</option>
-            <option value="1" selected>1초</option>
+            <option value="0.3">0.3초 (빠른 컷)</option>
+            <option value="0.5" selected>0.5초</option>
+            <option value="1">1초</option>
             <option value="2">2초</option>
             <option value="3">3초</option>
             <option value="5">5초</option>
@@ -2767,13 +2768,14 @@ select.setting-input {
         </div>
 
         <div class="setting-group">
-          <label class="setting-label">최대 프레임 수</label>
+          <label class="setting-label">최대 장면 수</label>
           <select class="setting-input" id="maxFrames">
-            <option value="10">10</option>
-            <option value="20" selected>20</option>
-            <option value="30">30</option>
+            <option value="20">20</option>
             <option value="50">50</option>
             <option value="100">100</option>
+            <option value="200" selected>200</option>
+            <option value="300">300</option>
+            <option value="500">500</option>
           </select>
         </div>
 
@@ -6045,10 +6047,15 @@ async function detectScenes(sensitivity, minScene, maxFrames) {
   // ?? 理쒖쥌 ?꾪꽣留????????????????????????????????????????????????????????
   let filtered = mergeNearbySceneChanges(peaks, minScene);
   if (filtered.length > maxFrames - 1) {
+    const detectedCount = filtered.length + 1; // +1 = 첫 장면(t=0)
     filtered = filtered
       .sort((a, b) => b.score - a.score)
       .slice(0, maxFrames - 1)
       .sort((a, b) => a.time - b.time);
+    // 컷을 조용히 버리지 않고 사용자에게 알림
+    if (typeof showToast === 'function') {
+      showToast(`컷 ${detectedCount}개가 감지됐지만 '최대 장면 수'(${maxFrames})로 제한했습니다. 설정에서 값을 올리면 더 세밀하게 나눕니다.`);
+    }
   }
 
   return [{
